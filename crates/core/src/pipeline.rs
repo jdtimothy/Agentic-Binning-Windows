@@ -198,6 +198,8 @@ struct Inner {
     changed: Condvar,
     worker: Mutex<Option<JoinHandle<()>>>,
     busy: AtomicBool,
+    /// The run's first model command has been written to the log.
+    command_logged: AtomicBool,
     accepting_reruns: AtomicBool,
     rerun: AtomicBool,
     move_control: Mutex<Option<Arc<MoveControl>>>,
@@ -268,6 +270,7 @@ impl Pipeline {
                 changed: Condvar::new(),
                 worker: Mutex::new(None),
                 busy: AtomicBool::new(false),
+                command_logged: AtomicBool::new(false),
                 accepting_reruns: AtomicBool::new(false),
                 rerun: AtomicBool::new(false),
                 move_control: Mutex::new(None),
@@ -315,6 +318,7 @@ impl Pipeline {
         let inner = self.inner.clone();
         *inner.control.lock() = Control::Run;
         inner.busy.store(true, Ordering::SeqCst);
+        inner.command_logged.store(false, Ordering::SeqCst);
         inner.rerun.store(false, Ordering::SeqCst);
         inner.accepting_reruns.store(matches!(job, Job::Run { analyze: true, .. }), Ordering::SeqCst);
         let first_phase = match &job {
@@ -649,6 +653,13 @@ fn analyze_item(inner: &Inner, env: &RunEnv, item: &Item) -> Result<ItemOutcome,
                 inner.update(|s| s.partial = Some(partial));
             }
         });
+        // The first command of a run goes to the log, so it can be tried by hand in a terminal.
+        let failed = reply.is_err();
+        if failed || !inner.command_logged.swap(true, Ordering::SeqCst) {
+            if let Some(command) = env.vision.last_command() {
+                (env.log)(&format!("Ran: {command}"));
+            }
+        }
         let reply = match reply {
             Ok(r) => r,
             Err(e) => {
@@ -938,7 +949,13 @@ fn sort_chunk(
             return Ok(());
         }
         *calls -= 1;
-        let reply = model.complete(sorting::prompt::SYSTEM, &sorting::prompt::assign_user(chunk, &listed, &feedback, max_new), &format, max_tokens)?;
+        let reply = model.complete(sorting::prompt::SYSTEM, &sorting::prompt::assign_user(chunk, &listed, &feedback, max_new), &format, max_tokens);
+        if reply.is_err() || !inner.command_logged.swap(true, Ordering::SeqCst) {
+            if let Some(command) = model.last_command() {
+                (env.log)(&format!("Ran: {command}"));
+            }
+        }
+        let reply = reply?;
         if reply.stop_reason == "user" || inner.stopping() {
             return Err(SortEnd::Stopped);
         }

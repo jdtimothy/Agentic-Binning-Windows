@@ -232,3 +232,53 @@ fn held_files_are_reported_and_can_be_copied() {
     assert!(h.app.dispatch("project.open", &json!({"path": format!("{}/cam", h.root)})).is_err());
     h.app.shutdown();
 }
+
+/// The GenieX path itself, against a stand-in for the CLI that checks each command's shape the
+/// way the real one would: status from `geniex list`, one `geniex infer` per item and per sort.
+#[cfg(unix)]
+#[test]
+fn drives_the_geniex_command_line() {
+    let fake = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_geniex.py");
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let h = harness();
+    let log = format!("{}/geniex-calls.log", h.root);
+    std::env::set_var("FAKE_GENIEX_LOG", &log);
+    let boot = h.call("settings.set", json!({"backend": "GenieX", "geniexPath": fake}));
+    assert_eq!(boot["simulated"], false);
+    assert_eq!(boot["genie"]["version"], "geniex version v0.10.0-fake");
+    assert_eq!(boot["genie"]["visionReady"], true);
+    assert_eq!(boot["genie"]["textReady"], true);
+
+    h.photo("cam/one.png", [20, 70, 210]);
+    h.photo("cam/two.png", [200, 70, 21]);
+    h.call("project.create", json!({"name": "Real"}));
+    h.call("media.addFolder", json!({"path": format!("{}/cam", h.root)}));
+    h.wait_for_event("registration", |v| v["finished"] == true);
+    h.settle();
+
+    let state = h.app.pipeline.state();
+    assert!(state.error.is_none(), "{:?}", state.error);
+    assert_eq!((state.analyzed, state.failed), (2, 0));
+    assert_eq!(state.last_profile.as_ref().unwrap().generated_tokens, 40);
+    let grid = h.call("grid", json!({}));
+    assert_eq!(grid["status"]["text"], "2 files ready to bin");
+    assert_eq!(grid["rows"][0]["friendlyName"], "Fake Still sorted");
+    assert_eq!(grid["rows"][0]["categoryName"], "Fakes");
+    let detail = h.call("item.detail", json!({"id": grid["rows"][0]["id"]}));
+    assert_eq!(detail["simulated"], false);
+    assert_eq!(detail["analysis"]["modelId"], "LiquidAI/LFM3-VL-2B-GGUF:Q4_0");
+    assert_eq!(detail["analysis"]["stopReason"], "eos");
+
+    let calls = std::fs::read_to_string(&log).unwrap();
+    let infers: Vec<&str> = calls.lines().filter(|l| l.contains("\"infer\"")).collect();
+    assert_eq!(infers.iter().filter(|l| l.contains("LFM3-VL-2B-GGUF:Q4_0")).count(), 2);
+    assert_eq!(infers.iter().filter(|l| l.contains("LFM3-1.7B-GGUF:Q4_0")).count(), 1);
+    assert!(infers.iter().all(|l| l.contains("\"--compute\", \"npu\"")));
+    let log_lines = h.call("log", json!({}));
+    let lines: Vec<&str> = log_lines["lines"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
+    assert!(lines.iter().any(|l| l.contains("Opened Real")));
+    assert!(lines.iter().any(|l| l.contains("Ran: geniex --skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0")), "{lines:?}");
+    h.app.shutdown();
+}

@@ -13,7 +13,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 
 *These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
 
-> **Status: built and tested without Windows.** The core logic has 57 automated tests and the interface was exercised end to end in a browser, all on Linux with a simulated model. Nothing has run on a Snapdragon X PC yet, and no real `geniex` command has been executed. Start with [docs/testing-on-windows.md](docs/testing-on-windows.md).
+> **Status: built and tested without Windows.** The core logic has 58 automated tests, including one that drives the GenieX command path against a stand-in for the CLI and the interface was exercised end to end in a browser, all on Linux with a simulated model. Nothing has run on a Snapdragon X PC yet, and no real `geniex` command has been executed. Start with [docs/testing-on-windows.md](docs/testing-on-windows.md).
 
 ## What you need
 

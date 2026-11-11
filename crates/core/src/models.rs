@@ -35,6 +35,10 @@ pub trait VisionModel: Send + Sync {
     fn generate(&self, media: &PreparedMedia, on_token: &mut dyn FnMut(&str)) -> Result<VisionReply, VisionError>;
     /// Asks a running `generate` to stop early. Callable from any thread.
     fn cancel(&self);
+    /// The terminal command behind the last call, for the activity log.
+    fn last_command(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How the reply must be shaped, in both forms: Claude reads the JSON schema, the local models
@@ -105,6 +109,10 @@ pub trait TextModel: Send + Sync {
     /// One single-turn call. `max_tokens` caps a local model's reply.
     fn complete(&self, system: &str, user: &str, format: &ReplyFormat, max_tokens: u32) -> Result<TextReply, TextError>;
     fn cancel(&self);
+    /// The terminal command behind the last call, for the activity log.
+    fn last_command(&self) -> Option<String> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -508,6 +508,9 @@ impl VisionModel for GenieVisionModel {
     fn cancel(&self) {
         self.cli.cancel();
     }
+    fn last_command(&self) -> Option<String> {
+        Some(self.cli.last_command.lock().clone()).filter(|c| !c.is_empty())
+    }
 }
 
 /// LFM3-1.7B through `geniex infer`, the reply held to the call's grammar.
@@ -543,6 +546,9 @@ impl TextModel for GenieTextModel {
     }
     fn cancel(&self) {
         self.cli.cancel();
+    }
+    fn last_command(&self) -> Option<String> {
+        Some(self.cli.last_command.lock().clone()).filter(|c| !c.is_empty())
     }
 }
 
