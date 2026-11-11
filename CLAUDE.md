@@ -5,6 +5,8 @@ Windows (Snapdragon X Elite / X2 Elite) version of Agentic Binning for Android
 unclear, the Android source is the reference, and the Rust module names its
 Kotlin original in a comment.
 
+A first session on a real Snapdragon X PC starts with `docs/windows-agent-brief.md`.
+
 ## Layout
 
 - `crates/core`: all logic, no UI. `app.rs` is the command interface
