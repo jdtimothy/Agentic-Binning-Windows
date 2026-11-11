@@ -229,7 +229,7 @@ button.rowbtn:hover { background: var(--chip2); }
 .rowbtn .tx b { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rowbtn .tx span { font-size: 12.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rowbtn.cur { border-color: var(--accent); background: var(--asoft); }
-.two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.two-up { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field input[type="text"], .field input[type="password"], .field input[type="date"], .field select, .input { height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--field); color: var(--text); font-size: 15px; width: 100%; user-select: text; }
 .field select option { background: var(--bg); color: var(--text); }
