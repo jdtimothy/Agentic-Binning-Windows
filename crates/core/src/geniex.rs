@@ -3,7 +3,9 @@
 //!
 //! - `geniex --version` and `geniex list --format json` to see what is installed,
 //! - `geniex pull <model>:<precision>` to download a model,
-//! - `geniex infer <model>:<precision> ...` once per photo, video or sorting call.
+//! - `geniex serve`, started once and kept running, which every photo, video and sorting call is
+//!   sent to so the model stays loaded between them (see [`crate::geniex_serve`]),
+//! - `geniex infer <model>:<precision> ...` once per call instead, when `geniex serve` cannot start.
 //!
 //! How `geniex infer` behaves was first read from the CLI's source (`cli/cmd/geniex/infer.go` and
 //! `common/process.go`, Nov 2026), then checked by a real run on GenieX CLI v0.10.0 (QAIRT 2.50,
@@ -35,6 +37,7 @@
 
 use crate::analysis::{budget, prompt};
 use crate::db::Profile;
+use crate::geniex_serve::{GenieServer, ServeError};
 use crate::media::{find_program, quiet_command, PreparedMedia};
 use crate::models::{ReplyFormat, SortUnavailable, TextError, TextModel, TextReply, VisionError, VisionModel, VisionReply};
 use parking_lot::Mutex;
@@ -103,7 +106,7 @@ fn strip_ansi(s: &str) -> String {
 }
 
 /// The CLI with the environment every call shares.
-fn base_command(program: &str) -> Command {
+pub(crate) fn base_command(program: &str) -> Command {
     let mut cmd = quiet_command(program);
     cmd.env("NO_COLOR", "1").env("GENIEX_LOG", "none");
     cmd
@@ -335,12 +338,17 @@ pub struct GenieCli {
     cancelled: AtomicBool,
     /// The last command line, shown in Settings so it can be tried by hand in a terminal.
     pub last_command: Mutex<String>,
+    /// The running `geniex serve` calls go to. Without one, each call is its own `geniex infer`.
+    server: Option<Arc<GenieServer>>,
 }
 
 pub struct InferRequest<'a> {
     pub model: &'a str,
     pub system: &'a str,
+    /// The text of the user turn, without the image paths.
     pub user: &'a str,
+    /// Absolute image paths with forward slashes, in the order the model should see them.
+    pub images: &'a [String],
     pub grammar: Option<&'a str>,
     pub max_tokens: u32,
     pub nctx: u32,
@@ -348,7 +356,24 @@ pub struct InferRequest<'a> {
 
 impl GenieCli {
     pub fn new(program: String, compute: String, scratch_dir: String) -> Self {
-        Self { program, compute, scratch_dir, child: Mutex::new(None), cancelled: AtomicBool::new(false), last_command: Mutex::new(String::new()) }
+        Self { program, compute, scratch_dir, child: Mutex::new(None), cancelled: AtomicBool::new(false), last_command: Mutex::new(String::new()), server: None }
+    }
+
+    /// Sends calls to `server`, which keeps the model loaded between them.
+    pub fn with_server(mut self, server: Arc<GenieServer>) -> Self {
+        self.server = Some(server);
+        self
+    }
+
+    /// Has the server load `model` now, so the first call does not wait for it. An error means
+    /// the model cannot run. Does nothing without a server, or when `geniex serve` cannot start:
+    /// `geniex infer` then loads the model in each call.
+    pub fn load_model(&self, model: &str, nctx: u32) -> Result<(), String> {
+        let Some(server) = &self.server else { return Ok(()) };
+        match server.load(&self.program, &self.compute, model, nctx, &self.cancelled) {
+            Ok(()) | Err(ServeError::Unavailable(_)) => Ok(()),
+            Err(ServeError::Failed(e)) => Err(e),
+        }
     }
 
     /// Stops the running command, if any. Callable from any thread.
@@ -378,16 +403,34 @@ impl GenieCli {
         args
     }
 
-    /// One `geniex infer` call. `on_text` receives everything the reply has printed so far, as it
-    /// grows. A cancelled call returns with stop reason `user`.
+    /// One call to the model: through the running `geniex serve`, or as one `geniex infer` when
+    /// there is none. `on_text` receives everything printed so far, as it grows (from the server
+    /// that is the reply alone; `geniex infer` prints the prompt before it). A cancelled call
+    /// returns with stop reason `user`.
     pub fn infer(&self, req: &InferRequest, on_text: &mut dyn FnMut(&str)) -> Result<InferOutput, String> {
         std::fs::create_dir_all(&self.scratch_dir).map_err(|e| format!("Cannot create {}: {e}", self.scratch_dir))?;
+        let mut no_server = String::new();
+        if let Some(server) = &self.server {
+            if self.cancelled.load(Ordering::SeqCst) {
+                return Ok(InferOutput { text: String::new(), profile: Profile { stop_reason: "user".into(), ..Default::default() } });
+            }
+            match server.chat(&self.program, &self.compute, req, &self.cancelled, on_text) {
+                Ok((out, command)) => {
+                    *self.last_command.lock() = command;
+                    return Ok(out);
+                }
+                Err(ServeError::Failed(e)) => return Err(e),
+                Err(ServeError::Unavailable(why)) => no_server = format!("  (one command per item, because: {why})"),
+            }
+        }
         let prompt_file = format!("{}/prompt.txt", self.scratch_dir);
         // A .cmd or .bat launcher can't take an argument with quotes and newlines, so the system
         // prompt then goes at the top of the prompt file instead of in `-s`.
         let lower = self.program.to_lowercase();
         let system_inline = !(lower.ends_with(".cmd") || lower.ends_with(".bat"));
-        let prompt_text = if system_inline || req.system.is_empty() { req.user.to_string() } else { format!("{}\n\n{}", req.system, req.user) };
+        // The CLI is told which images to attach by their paths, each on its own line after the text.
+        let user = req.images.iter().fold(req.user.to_string(), |text, path| text + "\n" + path);
+        let prompt_text = if system_inline || req.system.is_empty() { user } else { format!("{}\n\n{}", req.system, user) };
         std::fs::write(&prompt_file, prompt_text).map_err(|e| format!("Cannot write {prompt_file}: {e}"))?;
         let grammar_file = match req.grammar {
             Some(g) => {
@@ -399,7 +442,7 @@ impl GenieCli {
         };
         let args = self.infer_args(req, &prompt_file, grammar_file.as_deref(), system_inline);
         *self.last_command.lock() = format!(
-            "geniex {}",
+            "geniex {}{no_server}",
             args.iter().map(|a| if a.contains([' ', '\n', '"']) { format!("\"{}\"", a.replace('\n', " ").replace('"', "\\\"")) } else { a.clone() }).collect::<Vec<_>>().join(" ")
         );
         if self.cancelled.load(Ordering::SeqCst) {
@@ -464,23 +507,29 @@ impl GenieCli {
 /// The user turn for the vision model: the instruction, then each frame's absolute path on its
 /// own line (forward slashes), which is how the CLI is told which images to attach.
 pub fn vision_prompt(media: &PreparedMedia) -> Result<String, String> {
+    let (text, images) = vision_parts(media)?;
+    Ok(images.iter().fold(text, |text, path| text + "\n" + path))
+}
+
+/// The instruction and the frames' paths (forward slashes), checked for what `geniex infer`
+/// could not take: a slash in the text, or a path that is not one line ending in .jpg.
+fn vision_parts(media: &PreparedMedia) -> Result<(String, Vec<String>), String> {
     let text = prompt::user_text(media.kind, &media.frame_times_ms);
     if text.contains('/') || text.contains('\\') {
         return Err("The prompt text may not contain a slash".into());
     }
-    let mut out = text;
+    let mut images = Vec::new();
     for p in &media.image_paths {
         let p = p.replace('\\', "/");
         if p.contains('\n') || !p.to_lowercase().ends_with(".jpg") {
             return Err(format!("Not a usable image path: {p}"));
         }
-        out.push('\n');
-        out.push_str(&p);
+        images.push(p);
     }
-    Ok(out)
+    Ok((text, images))
 }
 
-/// LFM3-VL through `geniex infer`: one command per photo or clip, each a fresh single-turn call.
+/// LFM3-VL through GenieX: one fresh single-turn call per photo or clip.
 pub struct GenieVisionModel {
     pub cli: Arc<GenieCli>,
     pub spec: ModelSpec,
@@ -503,14 +552,15 @@ impl VisionModel for GenieVisionModel {
     }
     fn load(&self, max_frames: u32) -> Result<(), VisionError> {
         self.cli.reset_cancel();
-        *self.nctx.lock() = budget::context_for(max_frames, budget::FALLBACK_TOKENS_PER_FRAME);
-        Ok(())
+        let nctx = budget::context_for(max_frames, budget::FALLBACK_TOKENS_PER_FRAME);
+        *self.nctx.lock() = nctx;
+        self.cli.load_model(&self.spec.key(), nctx).map_err(VisionError)
     }
     fn generate(&self, media: &PreparedMedia, on_token: &mut dyn FnMut(&str)) -> Result<VisionReply, VisionError> {
-        let user = vision_prompt(media).map_err(VisionError)?;
+        let (user, images) = vision_parts(media).map_err(VisionError)?;
         let grammar = self.use_grammar.then(|| prompt::grammar(media.kind));
         let key = self.spec.key();
-        let req = InferRequest { model: &key, system: prompt::SYSTEM, user: &user, grammar: grammar.as_deref(), max_tokens: prompt::max_tokens(media.kind), nctx: *self.nctx.lock() };
+        let req = InferRequest { model: &key, system: prompt::SYSTEM, user: &user, images: &images, grammar: grammar.as_deref(), max_tokens: prompt::max_tokens(media.kind), nctx: *self.nctx.lock() };
         // The reply is one JSON object; what was printed before its first brace is the echoed prompt.
         let mut sent = 0usize;
         let mut forward = |printed: &str| {
@@ -549,12 +599,12 @@ impl TextModel for GenieTextModel {
         if st.error.is_none() && !has_model(&st.models, &self.spec) {
             return Err(TextError::Unavailable(SortUnavailable::ModelNotDownloaded, format!("{} is not downloaded", self.spec.display_name)));
         }
-        Ok(())
+        self.cli.load_model(&self.spec.key(), TEXT_CONTEXT).map_err(|e| TextError::Unavailable(SortUnavailable::ModelLoadFailed, e))
     }
     fn complete(&self, system: &str, user: &str, format: &ReplyFormat, max_tokens: u32) -> Result<TextReply, TextError> {
         let started = Instant::now();
         let key = self.spec.key();
-        let req = InferRequest { model: &key, system, user, grammar: Some(&format.grammar), max_tokens, nctx: TEXT_CONTEXT };
+        let req = InferRequest { model: &key, system, user, images: &[], grammar: Some(&format.grammar), max_tokens, nctx: TEXT_CONTEXT };
         let out = self.cli.infer(&req, &mut |_| {}).map_err(|e| TextError::Unavailable(SortUnavailable::ModelLoadFailed, e))?;
         Ok(TextReply {
             text: out.text,
@@ -658,7 +708,7 @@ mod tests {
     #[test]
     fn builds_infer_arguments() {
         let cli = GenieCli::new("geniex".into(), "npu".into(), "/tmp/x".into());
-        let req = InferRequest { model: "LiquidAI/LFM3-VL-2B-GGUF:Q4_0", system: "sys", user: "u", grammar: Some("g"), max_tokens: 400, nctx: 16384 };
+        let req = InferRequest { model: "LiquidAI/LFM3-VL-2B-GGUF:Q4_0", system: "sys", user: "u", images: &[], grammar: Some("g"), max_tokens: 400, nctx: 16384 };
         let args = cli.infer_args(&req, "/tmp/x/prompt.txt", Some("/tmp/x/grammar.gbnf"), true);
         let joined = args.join(" ");
         assert!(joined.starts_with("--skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0 --compute npu --nctx 16384 --max-tokens 400 --think=false"));

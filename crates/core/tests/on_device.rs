@@ -22,6 +22,7 @@ use binning_core::app::App;
 use binning_core::db::{ItemStatus, NewItem, Profile, ProjectDb};
 use binning_core::files;
 use binning_core::geniex::{self, GenieCli, GenieTextModel, GenieVisionModel, LFM3_1_7B, LFM3_VL_2B};
+use binning_core::geniex_serve::GenieServer;
 use binning_core::media::{Ffmpeg, MediaPreparer, PreparedMedia};
 use binning_core::models::{ReplyFormat, TextModel, VisionModel, VisionReply};
 use binning_core::moves::{BinFilesJob, MoveControl, MoveOutcome};
@@ -50,12 +51,30 @@ fn compute() -> String {
     std::env::var("AB_COMPUTE").unwrap_or_else(|_| "npu".into())
 }
 
+/// Whether the tests go through `geniex serve`, as the app does. `AB_NO_SERVE=1` runs one
+/// `geniex infer` per call instead, which is what the app falls back to.
+fn serving() -> bool {
+    std::env::var("AB_NO_SERVE").is_err()
+}
+
+/// One server for every test in this run, as the app has one for all its runs. Windows ends it
+/// with the test process.
+fn cli(scratch: &str) -> Arc<GenieCli> {
+    static SERVER: std::sync::OnceLock<Arc<GenieServer>> = std::sync::OnceLock::new();
+    let cli = GenieCli::new(program(), compute(), scratch.to_string());
+    if !serving() {
+        return Arc::new(cli);
+    }
+    let server = SERVER.get_or_init(|| Arc::new(GenieServer::new(norm(std::env::temp_dir().join("ab-on-device-serve")))));
+    Arc::new(cli.with_server(server.clone()))
+}
+
 fn vision(scratch: &str) -> GenieVisionModel {
-    GenieVisionModel::new(Arc::new(GenieCli::new(program(), compute(), scratch.to_string())), LFM3_VL_2B)
+    GenieVisionModel::new(cli(scratch), LFM3_VL_2B)
 }
 
 fn text(scratch: &str) -> GenieTextModel {
-    GenieTextModel { cli: Arc::new(GenieCli::new(program(), compute(), scratch.to_string())), spec: LFM3_1_7B }
+    GenieTextModel { cli: cli(scratch), spec: LFM3_1_7B }
 }
 
 /// A picture that is hard to describe wrongly: a big square of one colour on white.
@@ -200,8 +219,8 @@ fn g05_a_photo_without_the_grammar_flag() {
     println!("parses as the app's JSON without a grammar: {}", analysis::parse(&reply.text, ItemKind::Photo).is_some());
 }
 
-/// Stop must end the command quickly and leave no GenieX process running, and the next call
-/// must work.
+/// Stop must end the call quickly, and the next call must work. With one `geniex infer` per
+/// call (`AB_NO_SERVE=1`) no GenieX process may be left running; `geniex serve` stays, by design.
 #[test]
 #[ignore = "needs GenieX"]
 fn g06_stop_ends_the_command_and_the_next_call_works() {
@@ -212,7 +231,8 @@ fn g06_stop_ends_the_command_and_the_next_call_works() {
     let media = prepare(&root, 1, &format!("{root}/camera/red.png"), model.image_edge());
     let (worker_model, worker_media) = (model.clone(), media.clone());
     let worker = std::thread::spawn(move || worker_model.generate(&worker_media, &mut |_| {}));
-    std::thread::sleep(Duration::from_millis(1500));
+    // Through the server the model is already loaded and a photo takes about 3 s, so Stop comes sooner.
+    std::thread::sleep(Duration::from_millis(if serving() { 300 } else { 1500 }));
     let asked = Instant::now();
     model.cancel();
     let reply = worker.join().unwrap().expect("a stopped call is not an error");
@@ -220,7 +240,7 @@ fn g06_stop_ends_the_command_and_the_next_call_works() {
     assert_eq!(reply.profile.stop_reason, "user", "the call was not stopped (if it simply finished in under 1.5 s, that is good news: say so in the notes)");
     assert!(asked.elapsed() < Duration::from_secs(10), "Stop took too long");
     std::thread::sleep(Duration::from_secs(2));
-    if cfg!(windows) {
+    if cfg!(windows) && !serving() {
         let tasks = std::process::Command::new("tasklist").output().map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase()).unwrap_or_default();
         let left: Vec<&str> = tasks.lines().filter(|l| l.contains("geniex")).collect();
         assert!(left.is_empty(), "a GenieX process is still running after Stop (the CLI may start a helper that outlives it): {left:?}");
@@ -230,14 +250,17 @@ fn g06_stop_ends_the_command_and_the_next_call_works() {
     assert_eq!(again.profile.stop_reason, "eos", "the call after a Stop must run normally");
 }
 
-/// Not a pass or fail: how long a call takes, twice in a row. Each item starts `geniex` again,
-/// so the model is loaded every time; these numbers decide whether that is acceptable.
+/// Not a pass or fail: how long a call takes, twice in a row. Through `geniex serve` the model
+/// is loaded once, before the first photo. With `AB_NO_SERVE=1` each photo starts `geniex` again
+/// and loads the model again, which is the difference these numbers show.
 #[test]
 #[ignore = "needs GenieX"]
 fn g07_timings_for_two_photos_in_a_row() {
     let (_d, root) = temp();
     let model = vision(&format!("{root}/scratch"));
+    let loading = Instant::now();
     model.load(16).unwrap();
+    println!("loading the model took {:.1} s (nothing is loaded here with AB_NO_SERVE=1)", loading.elapsed().as_secs_f64());
     let mut seconds = Vec::new();
     for (i, rgb) in [[220, 20, 20], [20, 160, 40]].into_iter().enumerate() {
         let source = format!("{root}/camera/{i}.png");
@@ -245,7 +268,7 @@ fn g07_timings_for_two_photos_in_a_row() {
         let media = prepare(&root, i as i64 + 1, &source, model.image_edge());
         let (reply, _, took) = describe(&model, &media);
         let writing = if reply.profile.decoding_speed > 0.0 { reply.profile.generated_tokens as f64 / reply.profile.decoding_speed } else { 0.0 };
-        println!("photo {}: {took:.1} s in all, about {writing:.1} s of it writing the reply, so about {:.1} s starting GenieX and loading the model", i + 1, (took - writing).max(0.0));
+        println!("photo {}: {took:.1} s in all, about {writing:.1} s of it writing the reply, so about {:.1} s on everything else (reading the picture; with AB_NO_SERVE=1 also starting GenieX and loading the model)", i + 1, (took - writing).max(0.0));
         seconds.push(took);
     }
     println!("\nWRITE DOWN: seconds per photo = {seconds:.1?}. A 1,000 photo project takes about {:.0} minutes at this rate.", seconds.iter().sum::<f64>() / seconds.len() as f64 * 1000.0 / 60.0);

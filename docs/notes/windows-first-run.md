@@ -52,6 +52,28 @@ A hand run with timestamps (`output/hand-infer-stdout.txt`, `output/hand-infer-s
 
 So loading and unloading are about 80% of every call. One command per item works, but it is slow, and nearly half of the overhead comes after the answer is already on stderr. Two things the owner could decide on: take the result as soon as the stderr line arrives and let the process finish while the next item is prepared (two `geniex` processes must still never overlap on the NPU), or ask GenieX for a way to keep a model loaded between calls.
 
+### After the switch to `geniex serve`
+
+The owner chose to keep the model loaded, as the Android app does (it loads once per run in `PipelineController.runBatch` and releases before sorting). The app now starts one `geniex serve` and sends every call to it (`crates/core/src/geniex_serve.rs`). The same tests, same day, same PC (`output/serve-g01-g10.txt`):
+
+| | One `geniex infer` per call | Through `geniex serve` |
+| --- | --- | --- |
+| `g07`, one small photo | 15.8 s and 15.6 s | 1.4 s and 1.3 s |
+| `g10`, 7 files analyzed, sorted and binned | 116 s | 38 s |
+| `g01` to `g10` | all pass | all pass |
+
+In the dev server (optimised build), a folder of 20 photos of 4000 x 3000 and two 6-second 1080p clips, real models:
+
+- loading the vision model: about 8 s, once;
+- each photo: about 1.8 s, so about 30 minutes for 1,000 photos instead of about 262;
+- each clip: about 26 s (16 frames);
+- sorting all 22: about 24 s, of which about 19 s is the server swapping to the sorting model and the first call;
+- everything: 124 s.
+
+A debug build takes about 7 s a photo of that size, nearly all of it decoding the JPEG, so time only optimised builds.
+
+Also checked: the server stops when the app closes; it ends with the app when the app is ended from outside (a Windows job object; seen when the dev server and the test program were ended without a clean close); a settings change while nothing runs stops it; Stop returns at once and the next call works (`g06`).
+
 ## By hand
 
 - **Dev server, real models.** Settings shows the version, the path and both models. A project from a folder of 9 generated files: 7 analyzed and sorted into 4 categories, `empty.mp4` and `still_truncated.jpg` Failed with "Couldn't read this file", status line went Describing, Encoding frames, All caught up. An H.264 `.mp4` and an HEVC `.mov` both analyzed, with FFmpeg cutting the frames.
@@ -74,7 +96,7 @@ So loading and unloading are about 80% of every call. One command per item works
 3. **Things only a person can cause:** a file open in a video player during Bin Files, a OneDrive folder as the source, sleep during a run.
 4. **The installer puts the program where the app keeps its data.** Both are `%LOCALAPPDATA%\Agentic Binning`: `agentic-binning.exe` and `uninstall.exe` sit beside `settings.json`, `work` and `scratch`. Nothing broke, but what uninstalling does to the settings and project list was not tested. Worth a decision before release.
 5. **`g04`'s note:** find out whether the model is given all frames of a clip. In the dev server the two test clips got sensible descriptions, but both were short.
-6. **Speed** (above).
+6. **Speed:** photos are settled by `geniex serve` (above). A clip still takes about 26 s; where that goes (cutting frames or the model reading 16 of them) is not measured. With the server, frame times could sit next to their frames as on Android instead of in a list; not done, because it changes the prompt.
 7. **Friendly names end in "Photo" or "video"** ("Minimalist Red Square Photo", "Color test pattern video"). The sorting model's choice; the owner may want the prompt to forbid it.
 8. Adding 200 photos took about 35 s (about 6 a second) before analysis began.
 9. The screenshots in `screens/` are from the dev server in a browser, not from the window, and cover Analyze and Project Media in light and dark, plus Settings, the Bin Files sheet and its report in dark only.

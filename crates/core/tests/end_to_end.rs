@@ -244,15 +244,10 @@ fn build_fake_geniex(dir: &str) -> String {
     out
 }
 
-/// The GenieX path itself, against a stand-in for the CLI that checks each command's shape the
-/// way the real one would: status from `geniex list`, one `geniex infer` per item and per sort.
-#[test]
-fn drives_the_geniex_command_line() {
-    let h = harness();
-    let fake = build_fake_geniex(&h.root);
-    let fake = fake.as_str();
-    let log = format!("{}/geniex-calls.log", h.root);
-    std::env::set_var("FAKE_GENIEX_LOG", &log);
+/// Two photos through the GenieX path with the stand-in at `fake`: analyzed, sorted and shown as
+/// real results. Returns what the stand-in was asked (its commands and the server's requests)
+/// and the app's activity log.
+fn run_two_photos_with(h: &Harness, fake: &str) -> (String, Vec<String>) {
     let boot = h.call("settings.set", json!({"backend": "GenieX", "geniexPath": fake}));
     assert_eq!(boot["simulated"], false);
     assert_eq!(boot["genie"]["version"], "geniex version v0.10.0-fake");
@@ -279,14 +274,56 @@ fn drives_the_geniex_command_line() {
     assert_eq!(detail["analysis"]["modelId"], "LiquidAI/LFM3-VL-2B-GGUF:Q4_0");
     assert_eq!(detail["analysis"]["stopReason"], "eos");
 
-    let calls = std::fs::read_to_string(&log).unwrap();
+    let calls = std::fs::read_to_string(format!("{}/geniex-calls.log", h.root)).unwrap();
+    let log_lines = h.call("log", json!({}));
+    let lines: Vec<String> = log_lines["lines"].as_array().unwrap().iter().filter_map(|l| l.as_str().map(str::to_string)).collect();
+    assert!(lines.iter().any(|l| l.contains("Opened Real")));
+    (calls, lines)
+}
+
+/// The GenieX path as the app normally runs it, against a stand-in that answers as GenieX
+/// v0.10.0 does: one `geniex serve` for the whole run, each photo and the sort sent to it, the
+/// models loaded once each, and the server ended when the app closes.
+#[test]
+fn keeps_one_geniex_server_running_for_a_run() {
+    let h = harness();
+    let fake = build_fake_geniex(&h.root);
+    let (calls, lines) = run_two_photos_with(&h, &fake);
+
+    assert_eq!(calls.lines().filter(|l| l.contains("\"serve\"")).count(), 1, "{calls}");
+    assert!(!calls.contains("\"infer\""), "nothing may run as its own command while the server works: {calls}");
+    let serve = calls.lines().find(|l| l.contains("\"serve\"")).unwrap();
+    assert!(serve.contains("\"--compute\", \"npu\"") && serve.contains("\"--keepalive\""), "{serve}");
+    let requests: Vec<&str> = calls.lines().filter(|l| l.starts_with("request: ")).collect();
+    let of = |model: &str, load: bool| requests.iter().filter(|r| r.contains(model) && r.contains("\"messages\":[]") == load).count();
+    assert_eq!((of("LFM3-VL-2B-GGUF:Q4_0", true), of("LFM3-VL-2B-GGUF:Q4_0", false)), (1, 2), "one load and one request per photo: {requests:#?}");
+    assert_eq!((of("LFM3-1.7B-GGUF:Q4_0", true), of("LFM3-1.7B-GGUF:Q4_0", false)), (1, 1), "one load and one sort: {requests:#?}");
+    // The frame goes as a file path, never as the picture's bytes.
+    assert!(requests.iter().filter(|r| r.contains("\"image_url\"")).all(|r| r.contains(".jpg\"") && !r.contains("base64")));
+
+    let ran = lines.iter().find(|l| l.contains("Ran: geniex --skip-update serve --host 127.0.0.1:")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(ran.contains("/v1/chat/completions") && ran.contains("request.json"), "{ran}");
+    let port: u16 = ran.split("--host 127.0.0.1:").nth(1).and_then(|r| r.split(' ').next()).and_then(|p| p.parse().ok()).expect("the port in the logged command");
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(), "the server stays up between runs");
+    h.app.shutdown();
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err(), "closing the app must end the server");
+}
+
+/// A GenieX without `geniex serve`: the app tries it once, then runs one `geniex infer` per item
+/// and per sort, each checked by the stand-in the way the real CLI would.
+#[test]
+fn drives_the_geniex_command_line() {
+    let h = harness();
+    let fake = build_fake_geniex(&h.root);
+    std::fs::write(format!("{}/no-serve", h.root), "").unwrap();
+    let (calls, lines) = run_two_photos_with(&h, &fake);
+
+    assert_eq!(calls.lines().filter(|l| l.contains("\"serve\"")).count(), 1, "serve is tried once, not for every item: {calls}");
     let infers: Vec<&str> = calls.lines().filter(|l| l.contains("\"infer\"")).collect();
     assert_eq!(infers.iter().filter(|l| l.contains("LFM3-VL-2B-GGUF:Q4_0")).count(), 2);
     assert_eq!(infers.iter().filter(|l| l.contains("LFM3-1.7B-GGUF:Q4_0")).count(), 1);
     assert!(infers.iter().all(|l| l.contains("\"--compute\", \"npu\"")));
-    let log_lines = h.call("log", json!({}));
-    let lines: Vec<&str> = log_lines["lines"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
-    assert!(lines.iter().any(|l| l.contains("Opened Real")));
-    assert!(lines.iter().any(|l| l.contains("Ran: geniex --skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0")), "{lines:?}");
+    let ran = lines.iter().find(|l| l.contains("Ran: geniex --skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0")).unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(ran.contains("one command per item, because: geniex serve ended at once") && ran.contains("unknown command"), "{ran}");
     h.app.shutdown();
 }

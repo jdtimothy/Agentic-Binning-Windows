@@ -13,7 +13,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 
 *These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
 
-> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Not yet checked: moves between two drives and on exFAT, and the window's pickers, drag and drop and its own video frame reader. One photo takes about 16 seconds, most of it GenieX loading the model. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
+> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Not yet checked: moves between two drives and on exFAT, and the window's pickers, drag and drop and its own video frame reader. One 12-megapixel photo takes about 2 seconds and a 6-second clip about 26, with the model kept loaded by `geniex serve`. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
 
 ## What you need
 
@@ -36,14 +36,14 @@ The app runs GenieX as terminal commands, as child processes, and reads what the
 | --- | --- |
 | `geniex --version`, `geniex list --format json` | At start and in Settings, to see what is installed |
 | `geniex pull <model>:Q4_0 --model-type vlm\|llm --model-hub hf` | To download a model |
-| `geniex infer <model>:Q4_0 --compute npu --nctx … --max-tokens … -s <system prompt> --grammar-path <file> -i <prompt file>` | Once per photo, per video clip, and per sorting call |
+| `geniex serve --host 127.0.0.1:<port> --compute npu --keepalive 120` | Once, when a run first needs a model. Every photo, video clip and sorting call is then sent to it on this computer, so the model stays loaded between them. It is stopped when the app closes |
+| `geniex infer <model>:Q4_0 --compute npu --nctx … --max-tokens … -s <system prompt> --grammar-path <file> -i <prompt file>` | Once per photo, clip and sorting call instead, only when `geniex serve` cannot start |
 
-The exact command line of the last call is written to the activity log in Settings, so you can paste it into a terminal. The details, and what was read from the GenieX source to get them right, are at the top of [`crates/core/src/geniex.rs`](crates/core/src/geniex.rs).
+The command behind the last call is written to the activity log in Settings, so you can paste it into a terminal. The details, and what was observed of GenieX to get them right, are at the top of [`crates/core/src/geniex.rs`](crates/core/src/geniex.rs) and [`crates/core/src/geniex_serve.rs`](crates/core/src/geniex_serve.rs).
 
-Two things differ from Android because of how the command line works:
+As on Android, the vision model is loaded once for a run and the sorting model once for a sort, and only one of them is loaded at a time: the server swaps them by itself. One thing differs:
 
-- **The model is loaded for every item.** Each `geniex infer` is a new process, so each photo pays the model's load time. `geniex serve` would keep it loaded; that is a possible next step, not built.
-- **Video timestamps are listed, not interleaved.** The CLI attaches every image ahead of the text, so the frame times are given as a list in the prompt instead of sitting next to their frames. The prompt version is recorded as `analysis-v2-cli`.
+- **Video timestamps are listed, not interleaved.** Every frame is attached ahead of the text, so the frame times are given as a list in the prompt instead of sitting next to their frames. The prompt version is recorded as `analysis-v2-cli`.
 
 ## How it works
 

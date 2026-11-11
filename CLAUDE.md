@@ -37,11 +37,17 @@ The Windows build itself is checked by the Build workflow on GitHub's
 ## Rules that are easy to break
 
 - **GenieX is only ever run as a command** (`crates/core/src/geniex.rs`). The
-  owner asked for terminal commands called by the app, not the C API. The
-  notes at the top of that file say what was read from the CLI's source; read
-  them before changing a flag or the prompt file's shape.
+  owner asked for terminal commands called by the app, not the C API. The app
+  starts one `geniex serve` and sends every call to it, so the model stays
+  loaded (`geniex_serve.rs`, the owner's decision of 11 Nov 2026); one
+  `geniex infer` per call is the fallback when `serve` cannot start. The notes
+  at the top of both files say what was observed; read them before changing a
+  flag, a request field or the prompt file's shape.
+- The server must never outlive the app: `App::shutdown` stops it, and on
+  Windows a job object ends it if the app is killed. Keep both.
 - No line of the vision prompt except the image path lines may contain `/` or
-  `\`: the CLI finds image paths by pattern and would take the rest of the line.
+  `\`: with `geniex infer` the CLI finds image paths by pattern and would take
+  the rest of the line.
 - Paths are stored and compared with forward slashes (`paths::norm`), compared
   ignoring case. Don't use `std::path` joins for stored paths.
 - The move engine never overwrites and never deletes an unverified original.

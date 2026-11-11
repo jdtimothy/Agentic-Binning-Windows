@@ -1,0 +1,186 @@
+﻿    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests\on_device.rs (target\debug\deps\on_device-69ec5c20fb23c614.exe)
+
+running 10 tests
+test g01_geniex_reports_its_version_and_both_models ... GenieStatus {
+    path: Some(
+        "C:\\Users\\USER\\AppData\\Local\\GenieX CLI\\geniex.exe",
+    ),
+    version: Some(
+        "GenieX CLI Version:     v0.10.0",
+    ),
+    models: [
+        ListedModel {
+            name: "bartowski/NousResearch_Arete-27B-GGUF",
+            size: 17037391168,
+            runtime: "llama_cpp",
+            model_type: "llm",
+            precisions: [
+                "Q4_0",
+            ],
+        },
+        ListedModel {
+            name: "LiquidAI/LFM3-1.7B-GGUF",
+            size: 1049615680,
+            runtime: "llama_cpp",
+            model_type: "llm",
+            precisions: [
+                "Q4_0",
+            ],
+        },
+        ListedModel {
+            name: "LiquidAI/LFM3-VL-2B-GGUF",
+            size: 1428611680,
+            runtime: "llama_cpp",
+            model_type: "vlm",
+            precisions: [
+                "Q4_0",
+            ],
+        },
+        ListedModel {
+            name: "qualcomm/Qwen3-4B",
+            size: 3190318597,
+            runtime: "qairt",
+            model_type: "llm",
+            precisions: [
+                "W4A16",
+            ],
+        },
+        ListedModel {
+            name: "qualcomm/Qwen3-VL-8B-Instruct",
+            size: 7393714644,
+            runtime: "qairt",
+            model_type: "vlm",
+            precisions: [
+                "W4A16",
+            ],
+        },
+    ],
+    vision_ready: true,
+    text_ready: true,
+    error: None,
+}
+ok
+test g02_a_photo_returns_json_that_describes_it ... 
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A minimalist composition featuring a solid red square centered on a plain white background.", "actions": [], "tags": ["red", "square", "white", "minimalist"], "suggested_name": "Red Square", "shot_type": "close"}
+numbers: 3.6 s in all, stop reason "eos", 58 tokens, 68.3 tokens a second, first token after 2710 ms, streamed in 58 pieces
+ok
+test g03_paths_with_spaces_work ... 
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A simple graphic featuring a solid blue square centered on a white background.", "actions": [], "tags": ["blue", "square", "minimalist", "geometric", "centered"], "suggested_name": "Blue Square", "shot_type": "close"}
+numbers: 1.4 s in all, stop reason "eos", 61 tokens, 69.1 tokens a second, first token after 462 ms, streamed in 61 pieces
+ok
+test g04_video_frames_get_actions_with_times ... prompt file:
+Video: the 8 images are frames of one clip in time order, taken at these timestamps: 0:00, 0:00.5, 0:01, 0:01.5, 0:02, 0:02.5, 0:03, 0:03.5.
+Describe this video clip and how it changes over time.
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/100/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/101/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/102/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/103/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/104/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/105/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/106/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpvYZUQC/work/107/image.jpg
+
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {
+  "description": "The video shows a red square centered on a white background. The frames are static with no changes over time.",
+  "actions": [
+    {"t": "0:00", "text": "A red square is centered on a white background."},
+    {"t": "0:00", "text": "The red square remains unchanged throughout the clip."}
+  ],
+  "tags": ["red square", "white background", "static image"],
+  "suggested_name": "Red square on white background",
+  "shot_type": "close"
+}
+numbers: 5.7 s in all, stop reason "eos", 120 tokens, 59.9 tokens a second, first token after 3655 ms, streamed in 77 pieces
+NOTE: the reply does not mention both red and blue, so the model may be seeing only some of the 8 frames.
+ok
+test g05_a_photo_without_the_grammar_flag ... 
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A minimalist composition featuring a solid red square centered on a plain white background.", "actions": [], "tags": ["red", "square", "white", "minimalist", "geometric"], "suggested_name": "Red Square", "shot_type": "close"}
+numbers: 1.4 s in all, stop reason "eos", 62 tokens, 68.6 tokens a second, first token after 484 ms, streamed in 62 pieces
+parses as the app's JSON without a grammar: true
+ok
+test g06_stop_ends_the_command_and_the_next_call_works ... stopped 0.0 s after asking; stop reason "user"
+
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A minimalist composition featuring a solid red square centered on a plain white background.", "actions": [], "tags": ["red", "square", "white", "minimalist"], "suggested_name": "Red Square", "shot_type": "close"}
+numbers: 1.3 s in all, stop reason "eos", 58 tokens, 69.8 tokens a second, first token after 462 ms, streamed in 58 pieces
+ok
+test g07_timings_for_two_photos_in_a_row ... loading the model took 0.0 s (nothing is loaded here with AB_NO_SERVE=1)
+
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A minimalist composition featuring a solid red square centered on a plain white background.", "actions": [], "tags": ["red", "square", "white", "minimalist", "geometric"], "suggested_name": "Red Square", "shot_type": "close"}
+numbers: 1.4 s in all, stop reason "eos", 62 tokens, 69.1 tokens a second, first token after 484 ms, streamed in 62 pieces
+photo 1: 1.4 s in all, about 0.9 s of it writing the reply, so about 0.5 s on everything else (reading the picture; with AB_NO_SERVE=1 also starting GenieX and loading the model)
+
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"description": "A solid green square centered on a white background.", "actions": [], "tags": ["green", "square", "white", "geometric"], "suggested_name": "Green Square", "shot_type": "close"}
+numbers: 1.3 s in all, stop reason "eos", 51 tokens, 69.4 tokens a second, first token after 574 ms, streamed in 51 pieces
+photo 2: 1.3 s in all, about 0.7 s of it writing the reply, so about 0.6 s on everything else (reading the picture; with AB_NO_SERVE=1 also starting GenieX and loading the model)
+
+WRITE DOWN: seconds per photo = [1.4, 1.3]. A 1,000 photo project takes about 22 minutes at this rate.
+ok
+test g08_the_sorting_model_sorts_ten_items ... 
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"new_categories":[{"name":"Beach","description":"Sea turtle and monk seal on sand or rocks at the beach"}],"assignments":[{"id":1,"category":"turtle,beach,sand","name":"Turtle on Sand"},{"id":2,"category":"seal,beach,rocks","name":"Monk Seal on Rocks"},{"id":3,"category":"gecko,wall,lizard","name":"Gecko on Wall"},{"id":4,"category":"pancakes,breakfast,plate","name":"Macadamia Pancakes Plate"},{"id":5,"category":"shrimp,rice,lunch","name":"Shrimp Rice Lunch Paper Tray"},{"id":6,"category":"dessert,ice,syrup","name":"Shave Ice Syrup Cup"},{"id":7,"category":"sunset,ocean,clouds","name":"Sunset Over Sea"},{"id":8,"category":"sunset,sky,palms","name":"Orange Sky Dusk Palms"},{"id":9,"category":"sunrise,mountain,clouds","name":"Sunrise From Crater"},{"id":10,"category":"flower,hibiscus,garden","name":"Red Hibiscus Flower"}]}
+numbers: 4.2 s, stop reason "eos", 682 tokens in, 261 tokens out
+NOTE: the app would ask again, with these problems: ["'turtle,beach,sand' is not a usable category name (it has 3 words; use one general word). Items 1 need an existing category or one general word.", "'seal,beach,rocks' is not a usable category name (it has 3 words; use one general word). Items 2 need an existing category or one general word.", "'gecko,wall,lizard' is not a usable category name (it has 3 words; use one general word). Items 3 need an existing category or one general word.", "'pancakes,breakfast,plate' is not a usable category name (it has 3 words; use one general word). Items 4 need an existing category or one general word.", "'shrimp,rice,lunch' is not a usable category name (it has 3 words; use one general word). Items 5 need an existing category or one general word.", "'dessert,ice,syrup' is not a usable category name (it has 3 words; use one general word). Items 6 need an existing category or one general word.", "'sunset,ocean,clouds' is not a usable category name (it has 3 words; use one general word). Items 7 need an existing category or one general word.", "'sunset,sky,palms' is not a usable category name (it has 3 words; use one general word). Items 8 need an existing category or one general word.", "'sunrise,mountain,clouds' is not a usable category name (it has 3 words; use one general word). Items 9 need an existing category or one general word.", "'flower,hibiscus,garden' is not a usable category name (it has 3 words; use one general word). Items 10 need an existing category or one general word."]
+ok
+test g09_a_grammar_with_existing_category_names_is_accepted ... 
+command: geniex --skip-update serve --host 127.0.0.1:54200 --compute npu --keepalive 120  then: curl http://127.0.0.1:54200/v1/chat/completions -H "Content-Type: application/json" -d "@C:/Users/USER/AppData/Local/Temp/ab-on-device-serve/request.json"
+reply:   {"new_categories":[{"name":"Animals","description":"Wild animals and creatures in nature photos."}],"assignments":[{"id":1,"category":"Sea Animals","name":"Turtle on Beach"},{"id":2,"category":"Sea Animals","name":"Monk Seal Sleeping"},{"id":3,"category":"Sea Animals","name":"Gecko on Wall"},{"id":4,"category":"Food","name":"Macadamia Pancakes"},{"id":5,"category":"Food","name":"Shrimp Plate Lunch"},{"id":6,"category":"Dessert","name":"Shave Ice"},{"id":7,"category":"Sunset","name":"Sunset over the Sea"},{"id":8,"category":"Sunset","name":"Orange Sky at Dusk"},{"id":9,"category":"Sunrise","name":"Sunrise from Crater"},{"id":10,"category":"Flower","name":"Red Hibiscus"}]}
+ok
+test g10_the_app_analyzes_sorts_and_bins_a_small_project ... analysis and sorting took 38 s
+state: PipelineState { phase: Idle, project: Some("C:/Users/USER/AppData/Local/Temp/.tmpdp48Eo/Projects/On Device"), current_item_id: None, partial: None, last_profile: Some(Profile { stop_reason: "eos", ttft_ms: 500.892, prompt_tokens: 440, generated_tokens: 62, decoding_speed: 68.46342672701755 }), pending: 0, analyzed: 6, total: 7, failed: 1, download_fraction: None, error: None, frames_ready: 0, frames_total: 0, sort_done: 0, sort_total: 0, sort_notice: None, move_progress: None, move_outcome: None, move_message: None, move_ended: 0 }
+activity log: {
+  "lines": [
+    "16:05:48 Opened On Device",
+    "16:05:48 Added media to On Device: 7 added",
+    "16:06:00 Ran: geniex --skip-update serve --host 127.0.0.1:61615 --compute npu --keepalive 120  then: curl http://127.0.0.1:61615/v1/chat/completions -H \"Content-Type: application/json\" -d \"@C:/Users/USER/AppData/Local/Temp/.tmpdp48Eo/data/scratch/request.json\"",
+    "16:06:10 Cannot prepare item 7 (broken.jpg): FFmpeg could not read the file"
+  ]
+}
+IMG_0.png    Sorted     Squares          Red Square Minimalist
+IMG_1.png    Sorted     Squares          Red Square Minimalist
+IMG_2.png    Sorted     Squares          Blue Square Minimalist
+IMG_3.png    Sorted     Squares          Blue Square Minimalist
+IMG_4.png    Sorted     Squares          Green Square Minimalist
+IMG_5.png    Sorted     Squares          Yellow Square Minimalist
+broken.jpg   Failed     -                -
+report: {
+  "becameMissing": 0,
+  "checkOk": true,
+  "copiedShared": 0,
+  "folders": 1,
+  "headline": "6 files binned into 1 category folder",
+  "inPlace": 0,
+  "kind": "Bin",
+  "lastMoved": "Yellow Square Minimalist.png",
+  "leftOut": [
+    {
+      "itemId": 7,
+      "name": "broken.jpg",
+      "reason": "Failed",
+      "why": "Couldn't read this file."
+    }
+  ],
+  "message": null,
+  "moved": 6,
+  "numbered": [
+    "Red Square Minimalist 2.png",
+    "Blue Square Minimalist 2.png"
+  ],
+  "removedFolders": [],
+  "runId": 1,
+  "skipped": [],
+  "state": "Done",
+  "stillToMove": 0
+}
+ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 101.60s
+
+

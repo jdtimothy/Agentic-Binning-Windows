@@ -6,6 +6,7 @@ use crate::analysis::ItemKind;
 use crate::db::{self, ItemStatus, MediaRow, ProjectDb};
 use crate::error::{Error, Result};
 use crate::geniex::{self, GenieCli, GenieStatus, GenieTextModel, GenieVisionModel, ModelSpec, LFM3_1_7B, LFM3_VL_2B};
+use crate::geniex_serve::GenieServer;
 use crate::media::{self, Ffmpeg, FrameGrabber, MediaPreparer};
 use crate::models::{MockTextModel, MockVisionModel, TextModel, VisionModel, MOCK_VISION_ID};
 use crate::moves::{self, BinFilesJob};
@@ -45,6 +46,8 @@ pub struct App {
     pull_cancel: Arc<AtomicBool>,
     pulling: Mutex<Option<String>>,
     genie: Mutex<GenieStatus>,
+    /// The `geniex serve` process that keeps the model loaded between items; started by a run.
+    genie_server: Arc<GenieServer>,
     grabber: Mutex<Option<Arc<dyn FrameGrabber>>>,
     log: Arc<Mutex<VecDeque<String>>>,
     /// Pause between the simulated model's pieces of text (zero in tests).
@@ -347,6 +350,7 @@ impl App {
         );
         let app = Arc::new(App {
             keys: Arc::new(ApiKeyStore::new(&data_dir)),
+            genie_server: Arc::new(GenieServer::new(norm(data_dir.join("scratch")))),
             data_dir,
             settings_store,
             settings: Mutex::new(settings),
@@ -498,7 +502,8 @@ impl App {
         let genie = self.genie.lock().clone();
         let program = genie.path.clone().unwrap_or_else(|| "geniex".to_string());
         let scratch = norm(self.data_dir.join("scratch"));
-        let vision_cli = Arc::new(GenieCli::new(program.clone(), settings.compute.clone(), scratch.clone()));
+        let server = self.genie_server.clone();
+        let vision_cli = Arc::new(GenieCli::new(program.clone(), settings.compute.clone(), scratch.clone()).with_server(server.clone()));
         let vision: Arc<dyn VisionModel> = if simulated { Arc::new(MockVisionModel::new(delay)) } else { Arc::new(GenieVisionModel::new(vision_cli, LFM3_VL_2B)) };
         let keys = self.keys.clone();
         let (text_program, text_compute, text_scratch) = (program.clone(), settings.compute.clone(), scratch);
@@ -509,7 +514,7 @@ impl App {
                     Arc::new(crate::claude::ClaudeTextModel::new(move || keys.get()))
                 }
                 SortChoice::Lfm3 if simulated => Arc::new(MockTextModel::new(delay * 12)),
-                SortChoice::Lfm3 => Arc::new(GenieTextModel { cli: Arc::new(GenieCli::new(text_program.clone(), text_compute.clone(), text_scratch.clone())), spec: LFM3_1_7B }),
+                SortChoice::Lfm3 => Arc::new(GenieTextModel { cli: Arc::new(GenieCli::new(text_program.clone(), text_compute.clone(), text_scratch.clone()).with_server(server.clone())), spec: LFM3_1_7B }),
             }
         };
         let keys = self.keys.clone();
@@ -1288,6 +1293,11 @@ impl App {
                 self.settings_store.save(&next)?;
                 *self.settings.lock() = self.settings_store.load();
                 self.refresh_genie();
+                // A run started before the change keeps its server; otherwise the next run starts
+                // one for the settings as they are now, and none is left running for nothing.
+                if !self.pipeline.is_running() {
+                    self.genie_server.stop();
+                }
                 Ok(self.boot())
             }
             "apiKey.set" => {
@@ -1339,6 +1349,7 @@ impl App {
     pub fn shutdown(&self) {
         self.pull_cancel.store(true, Ordering::SeqCst);
         self.pipeline.stop_and_wait();
+        self.genie_server.stop();
     }
 }
 

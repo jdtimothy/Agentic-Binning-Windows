@@ -60,7 +60,7 @@ Use `scripts/make-test-media.sh` from the Android repository (it needs FFmpeg) o
 3. Expected from the Android test set: 7 added; `empty.mp4` and `still_truncated.jpg` end **Failed** ("Couldn't read this file"); the rest analyzed.
 4. When analysis ends, the status line shows **Categorizing**, then **All caught up**. Project Media should show category chips.
 
-Things to note down: seconds per photo and per clip (each one loads the model again), and whether a video's actions have sensible times.
+Things to note down: seconds per photo and per clip (the model is loaded once per run, through `geniex serve`), and whether a video's actions have sensible times.
 
 ## 4. Videos
 

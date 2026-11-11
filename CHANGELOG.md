@@ -14,6 +14,8 @@ own pickers, drag and drop and frame reader are not yet checked there.
 
 - Projects, adding folders and files (also by drag and drop), analysis with
   LFM3-VL-2B through the GenieX command line, sorting with LFM3-1.7B or Claude.
+- One `geniex serve` is kept running for a run, so the model is loaded once
+  instead of for every file: about 2 seconds a photo instead of 16.
 - Analyze and Project Media screens, search, filters, editing, Re-sort,
   category rename and merge, the failed-item sheet.
 - Bin Files with the folder check, checked copies, pause, stop, resume after a
