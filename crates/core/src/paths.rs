@@ -25,12 +25,26 @@ pub fn norm(p: impl AsRef<Path>) -> String {
     trimmed.to_string()
 }
 
-/// The canonical form of `path` (symlinks and `..` resolved), normalized; falls back to the
-/// absolute path when it cannot be resolved (the folder is gone).
+/// The canonical form of `path` (symlinks, `..` and Windows short names resolved), normalized.
+/// A path that does not exist yet is resolved through its nearest existing ancestor, so a new
+/// folder compares equal to its parent's spelling.
 pub fn canonical(path: &str) -> String {
-    match std::fs::canonicalize(path) {
-        Ok(p) => norm(p),
-        Err(_) => norm(std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path))),
+    if let Ok(p) = std::fs::canonicalize(path) {
+        return norm(p);
+    }
+    let absolute = norm(std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path)));
+    let mut head = absolute.as_str();
+    loop {
+        let up = parent(head);
+        if up == head || up.is_empty() {
+            return absolute;
+        }
+        // A drive root keeps its slash, or `C:` would mean the drive's current folder.
+        let probe = if up.ends_with(':') { format!("{up}/") } else { up.to_string() };
+        if let Ok(p) = std::fs::canonicalize(&probe) {
+            return format!("{}/{}", norm(p).trim_end_matches('/'), &absolute[up.len()..].trim_start_matches('/'));
+        }
+        head = up;
     }
 }
 
@@ -97,5 +111,8 @@ mod tests {
         assert_eq!(parent("a/b/c.JPG"), "a/b");
         assert_eq!(extension("a/b/c.tar.JPG"), "JPG");
         assert_eq!(extension("a/b/.hidden"), "");
+        let d = tempfile::tempdir().unwrap();
+        let real = canonical(&norm(d.path()));
+        assert_eq!(canonical(&format!("{}/not/there.jpg", norm(d.path()))), format!("{real}/not/there.jpg"));
     }
 }
