@@ -104,5 +104,5 @@ export async function keepAwake(on) {
 
 /** Hands frames the window decoded back to the core (video without FFmpeg). */
 export async function frameResult(payload) {
-  if (inApp) return T.core.invoke('frame_result', payload);
+  if (inApp) return T.core.invoke('frame_result', { result: payload });
 }
