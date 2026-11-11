@@ -233,16 +233,24 @@ fn held_files_are_reported_and_can_be_copied() {
     h.app.shutdown();
 }
 
+/// Compiles `tests/fixtures/fake_geniex.rs` with the `rustc` that runs the tests, so the stand-in
+/// is a real program on every platform (a script would need a shebang, or Python on the machine).
+fn build_fake_geniex(dir: &str) -> String {
+    let source = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_geniex.rs");
+    let out = format!("{dir}/geniex{}", std::env::consts::EXE_SUFFIX);
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+    let result = std::process::Command::new(rustc).args(["--edition", "2021", "-O", "-o", &out, source]).output().expect("could not run rustc");
+    assert!(result.status.success(), "building the GenieX stand-in failed: {}", String::from_utf8_lossy(&result.stderr));
+    out
+}
+
 /// The GenieX path itself, against a stand-in for the CLI that checks each command's shape the
 /// way the real one would: status from `geniex list`, one `geniex infer` per item and per sort.
-#[cfg(unix)]
 #[test]
 fn drives_the_geniex_command_line() {
-    let fake = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_geniex.py");
-    if std::process::Command::new("python3").arg("--version").output().is_err() {
-        return;
-    }
     let h = harness();
+    let fake = build_fake_geniex(&h.root);
+    let fake = fake.as_str();
     let log = format!("{}/geniex-calls.log", h.root);
     std::env::set_var("FAKE_GENIEX_LOG", &log);
     let boot = h.call("settings.set", json!({"backend": "GenieX", "geniexPath": fake}));
