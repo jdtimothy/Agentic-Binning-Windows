@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Binning</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<div id="app">
+  <main id="analyze" class="screen" aria-label="Analyze">
+    <header id="analyze-top" class="topbar glass col"></header>
+    <div id="runline" class="runline col" aria-live="polite"></div>
+    <section id="stage" class="stage col"></section>
+    <nav id="analyze-bottom" class="bottombar glass col" aria-label="Run controls"></nav>
+  </main>
+
+  <main id="media" class="screen" aria-label="Project media" hidden>
+    <header id="media-top" class="topbar glass col"></header>
+    <div id="media-search" class="search glass col" role="search"></div>
+    <section id="media-body" class="col" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:10px"></section>
+    <div id="media-dock" class="col" style="display:flex;flex-direction:column;gap:10px;flex:none"></div>
+  </main>
+</div>
+
+<div id="sheets"></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="drop">Drop to add to the project</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
