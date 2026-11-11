@@ -91,16 +91,18 @@ button.pill:hover, .ib:hover, .mini:hover, .txtbtn:hover { background: var(--chi
 @keyframes fade { from { opacity: 0; } }
 @keyframes blink { 50% { opacity: 0; } }
 
-.stage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.1fr) minmax(0, 1fr); gap: 14px; }
-@media (min-width: 980px) and (min-aspect-ratio: 5/4) { .stage { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); } }
-.carousel { position: relative; min-height: 0; perspective: 1100px; overflow: hidden; border-radius: 28px; outline: none; }
-.card { position: absolute; left: 50%; top: 50%; width: min(58%, 420px); height: min(94%, 520px); border-radius: 28px; padding: 10px 10px 14px; display: flex; flex-direction: column; gap: 6px; transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 420ms ease, opacity 420ms ease; transform: translate(-50%, -50%); will-change: transform; text-align: left; }
+.stage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; }
+/* A wide window gives the carousel room for three whole cards at full size, with the text beside it. */
+#analyze .col { max-width: 1500px; }
+@media (min-width: 1280px) and (min-aspect-ratio: 4/3) { .stage { grid-template-columns: minmax(930px, 1.7fr) minmax(300px, 1fr); grid-template-rows: minmax(0, 1fr); } }
+.carousel { position: relative; min-height: 0; perspective: 1100px; outline: none; }
+.card { position: absolute; left: 50%; top: 50%; width: clamp(200px, calc(100% / 2.4), 400px); aspect-ratio: 3 / 4; max-height: 96%; border-radius: 28px; padding: 10px 10px 14px; display: flex; flex-direction: column; gap: 6px; transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 420ms ease, opacity 420ms ease; transform: translate(-50%, -50%); will-change: transform; text-align: left; }
 /* The cards on either side sit behind the centre card: smaller, turned so their inner edge
    recedes, dimmed, and tucked just under its edge. */
 .card { z-index: 2; }
-.card.prev, .card.next { z-index: 1; box-shadow: none; }
-.card.prev { transform: translate(-136%, -50%) translateZ(-140px) rotateY(32deg) scale(0.84); filter: brightness(var(--dim-prev)); }
-.card.next { transform: translate(36%, -50%) translateZ(-140px) rotateY(-32deg) scale(0.84); filter: brightness(var(--dim-next)); }
+.card.prev, .card.next { z-index: 1; }
+.card.prev { transform: translate(-139%, -50%) translateZ(-140px) rotateY(32deg) scale(0.84); filter: brightness(var(--dim-prev)); }
+.card.next { transform: translate(39%, -50%) translateZ(-140px) rotateY(-32deg) scale(0.84); filter: brightness(var(--dim-next)); }
 .card.far-prev { z-index: 0; transform: translate(-215%, -50%) translateZ(-300px) rotateY(40deg) scale(0.7); opacity: 0; pointer-events: none; }
 .card.far-next { z-index: 0; transform: translate(115%, -50%) translateZ(-300px) rotateY(-40deg) scale(0.7); opacity: 0; pointer-events: none; }
 .card .shot { position: relative; flex: 1; min-height: 0; border-radius: 20px; overflow: hidden; background: var(--chip); display: grid; place-items: center; color: var(--sub); }
@@ -117,9 +119,9 @@ button.pill:hover, .ib:hover, .mini:hover, .txtbtn:hover { background: var(--chi
 .bdg.st.warn { background: #FFB547; color: #2A1A00; }
 .bdg.cat { left: 8px; top: 8px; max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bdg.bin { right: 8px; top: 8px; padding: 3px; border-radius: 9px; }
-.navbtn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 3; }
-.navbtn.l { left: 8px; }
-.navbtn.r { right: 8px; }
+.navbtn { position: absolute; top: auto; bottom: 0; z-index: 3; }
+.navbtn.l { left: 0; }
+.navbtn.r { right: 0; }
 .navbtn:disabled { opacity: 0.3; }
 
 .output { border-radius: 28px; padding: 20px 22px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
