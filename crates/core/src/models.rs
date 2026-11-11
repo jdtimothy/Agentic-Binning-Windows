@@ -248,16 +248,21 @@ impl MockTextModel {
     }
 }
 
-fn category_for(tag: &str) -> &'static str {
-    match tag {
-        "ocean" => "Ocean",
-        "forest" => "Nature",
-        "sunset" => "Sunsets",
-        "night" => "Night",
-        "indoor" => "Indoors",
-        "city" => "City",
-        _ => "Scenes",
+/// The category for an item's tags (stored in name order, so every tag is looked at).
+fn category_for(tags: &str) -> &'static str {
+    for tag in tags.split(',').map(str::trim) {
+        let category = match tag {
+            "ocean" => "Ocean",
+            "forest" => "Nature",
+            "sunset" => "Sunsets",
+            "night" => "Night",
+            "indoor" => "Indoors",
+            "city" => "City",
+            _ => continue,
+        };
+        return category;
     }
+    "Scenes"
 }
 
 impl TextModel for MockTextModel {
@@ -296,7 +301,7 @@ impl TextModel for MockTextModel {
         for line in items {
             let cols: Vec<&str> = line.split('\t').collect();
             let (Some(id), Some(name), Some(tags)) = (cols.first().and_then(|c| c.parse::<i64>().ok()), cols.get(2), cols.get(3)) else { continue };
-            let category = category_for(tags.split(',').next().unwrap_or("").trim());
+            let category = category_for(tags);
             if !existing.contains(&category) && !new_categories.contains(&category) {
                 new_categories.push(category);
             }

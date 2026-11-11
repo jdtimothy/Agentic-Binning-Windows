@@ -21,4 +21,9 @@ parking_lot = "0.12"
 fs4 = { version = "0.13", features = ["sync"] }
 
 [dev-dependencies]
+parking_lot = "0.12"
+image = { version = "0.25.5", default-features = false, features = ["png"] }
 tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
