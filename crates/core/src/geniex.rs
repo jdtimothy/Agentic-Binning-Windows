@@ -5,8 +5,21 @@
 //! - `geniex pull <model>:<precision>` to download a model,
 //! - `geniex infer <model>:<precision> ...` once per photo, video or sorting call.
 //!
-//! How `geniex infer` behaves was read from the CLI's source (`cli/cmd/geniex/infer.go` and
-//! `common/process.go`, Nov 2026). The points this module depends on:
+//! How `geniex infer` behaves was first read from the CLI's source (`cli/cmd/geniex/infer.go` and
+//! `common/process.go`, Nov 2026), then checked by a real run on GenieX CLI v0.10.0 (QAIRT 2.50,
+//! LFM3-VL-2B Q4_0 on the NPU). Observed on v0.10.0:
+//!
+//! - Every flag the app sends is accepted, including `--grammar-path`.
+//! - `-i <file>` ends the session by itself; the CLI does not wait for more input.
+//! - With `--test-mode`, stderr holds one JSON line with `Input`, `Output`, `Profile` and `Error`.
+//! - Stdout starts with status lines (`loading model...`, `Model loaded: ...`, `encoding...`, two
+//!   of them behind an emoji), then the echoed prompt (`> ` and `. ` lines), then the reply, then
+//!   the verbose block, which ends with `stop reason:    eos`.
+//!
+//! Still read from source only: the failure messages, and how a call that never loads the model
+//! ends. The tests use the real output (shortened image path) where they have it.
+//!
+//! The points this module depends on:
 //!
 //! - `-i <file>` reads the prompt from a file, so no prompt text has to survive Windows command
 //!   line quoting. `-s` sets the system prompt, `--grammar-path` a GBNF grammar file.
@@ -274,8 +287,15 @@ fn parse_test_mode(stderr: &str) -> Option<InferOutput> {
     None
 }
 
-/// Reads the reply and the `--verbose` profile from what the CLI printed. The echoed prompt is
-/// on the lines starting with `> ` and `. `; the reply follows; the profile block ends it.
+/// A line the CLI prints before the reply: blank, the echoed prompt (`> ` and `. `), or a status
+/// line (`loading model...`, `Model loaded: ...`, `encoding...`, the first and last behind an emoji).
+fn is_preamble(line: &str) -> bool {
+    let t = line.trim();
+    t.is_empty() || line.starts_with("> ") || line.starts_with(". ") || t.starts_with("Model loaded:") || t.ends_with("loading model...") || t.ends_with("encoding...")
+}
+
+/// Reads the reply and the `--verbose` profile from what the CLI printed. The status lines and
+/// the echoed prompt come first; the reply follows; the profile block ends it.
 pub fn parse_stdout(stdout: &str) -> InferOutput {
     let text = strip_ansi(stdout).replace('\r', "");
     let field = |label: &str| -> Option<String> {
@@ -290,7 +310,7 @@ pub fn parse_stdout(stdout: &str) -> InferOutput {
         decoding_speed: number("decode speed:").unwrap_or(0.0),
     };
     let body_end = text.rfind("\ntotal time:").unwrap_or(text.len());
-    let body: Vec<&str> = text[..body_end].lines().skip_while(|l| l.starts_with("> ") || l.starts_with(". ") || l.trim().is_empty()).collect();
+    let body: Vec<&str> = text[..body_end].lines().skip_while(|l| is_preamble(l)).collect();
     InferOutput { text: body.join("\n").trim().to_string(), profile }
 }
 
@@ -557,6 +577,38 @@ mod tests {
     use super::*;
     use crate::analysis::ItemKind;
 
+    /// Real stdout of `geniex --verbose infer` (GenieX CLI v0.10.0, LFM3-VL-2B Q4_0 on the NPU),
+    /// with the image path shortened. The globe emoji is what the CLI prints before its status lines.
+    const REAL_STDOUT: &str = "\u{1f30d}loading model...\nModel loaded: runtime=llama_cpp compute=npu ngl=-1 nctx=16384\n> Describe this photo.\n. C:/temp/test.jpg\n\u{1f30d}encoding...\nThe image shows a solid red square centered on a light gray background. The square is the only element present.\n\ntotal time:     2.911081s\nttft:           2.568213s\nmedia time:     2.411717s\nprompt time:    0.154753s\nprompt tokens:  284 token(s)\nprompt speed:   1835.182517 tok/s\ndecode time:    0.344611s\ndecode tokens:  22 token(s)\ndecode speed:   63.840098 tok/s\nstop reason:    eos\n\n";
+
+    /// Real stderr of the same call with `--test-mode`.
+    const REAL_STDERR: &str = "{\"Input\":\"Describe this photo.\\nC:/temp/test.jpg\",\"Output\":\"The image shows a solid red square centered on a light gray background. The square is the only element present.\",\"Profile\":{\"TTFT\":2568213,\"MediaTime\":2411717,\"PromptTime\":154753,\"DecodeTime\":344611,\"PromptTokens\":284,\"GeneratedTokens\":22,\"PrefillSpeed\":1835.1825166555736,\"DecodingSpeed\":63.84009796553215,\"DraftNTotal\":0,\"DraftNAccepted\":0,\"StopReason\":\"eos\"},\"Error\":null}\n";
+
+    const REAL_REPLY: &str = "The image shows a solid red square centered on a light gray background. The square is the only element present.";
+
+    #[test]
+    fn parses_real_verbose_stdout() {
+        let out = parse_stdout(REAL_STDOUT);
+        assert_eq!(out.text, REAL_REPLY);
+        assert_eq!(out.profile.stop_reason, "eos");
+        assert_eq!(out.profile.generated_tokens, 22);
+        assert_eq!(out.profile.prompt_tokens, 284);
+        assert!((out.profile.ttft_ms - 2568.213).abs() < 0.01);
+        assert!((out.profile.decoding_speed - 63.840098).abs() < 0.001);
+    }
+
+    #[test]
+    fn parses_real_test_mode_json() {
+        let out = parse_test_mode(REAL_STDERR).unwrap();
+        assert_eq!(out.text, REAL_REPLY);
+        assert_eq!(out.profile.stop_reason, "eos");
+        assert_eq!(out.profile.prompt_tokens, 284);
+        assert_eq!(out.profile.generated_tokens, 22);
+        assert!((out.profile.ttft_ms - 2568.213).abs() < 0.001);
+        assert!((out.profile.decoding_speed - 63.84009796553215).abs() < 1e-9);
+    }
+
+    /// A JSON reply in the same layout, written by hand: the real run answered in plain text.
     const VERBOSE_OUT: &str = "> Describe this photo.\n\n{\"description\": \"A red square.\", \"actions\": [], \"tags\": [\"red\", \"square\", \"shape\"], \"suggested_name\": \"Red Square\", \"shot_type\": \"close\"}\n\ntotal time:     2.500000s\nttft:           0.580000s\nmedia time:     0.380000s\nprompt time:    0.200000s\nprompt tokens:  281 token(s)\nprompt speed:   1405.000000 tok/s\ndecode time:    1.900000s\ndecode tokens:  42 token(s)\ndecode speed:   46.100000 tok/s\nstop reason:    eos\n\n";
 
     #[test]
