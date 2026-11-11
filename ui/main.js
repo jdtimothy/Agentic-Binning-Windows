@@ -215,9 +215,13 @@ function renderCarousel(stage, rows, p) {
     const d = i - at;
     const cls = d === 0 ? '' : d === -1 ? '.prev' : d === 1 ? '.next' : d < 0 ? '.far-prev' : '.far-next';
     const isCurrent = p.currentItemId === row.id;
+    // Every clip shows its frame dots; they light up as the frames are read, and stay lit once analyzed.
     let frames = null;
-    if (row.kind === 'Video' && isCurrent && p.framesTotal) {
-      frames = h('div.frames', Array.from({ length: p.framesTotal }, (_, k) => h(`i${k < p.framesReady || p.phase === 'Describing' ? '.on' : ''}`)));
+    if (row.kind === 'Video') {
+      const live = isCurrent && running();
+      const total = live && p.framesTotal ? p.framesTotal : Math.min(Math.max(1, Math.ceil((row.durationMs || 0) / 500)), S.boot.settings.maxFramesPerClip);
+      const lit = live ? (p.phase === 'Describing' ? total : p.framesReady) : (row.hasAnalysis ? total : 0);
+      frames = h('div.frames', Array.from({ length: total }, (_, k) => h(`i${k < lit ? '.on' : ''}`)));
     }
     const badge = row.status === 'Failed' ? h('span.bdg.st.warn', 'Failed') : row.status === 'Missing' ? h('span.bdg.st.warn', 'Missing') : row.status === 'Pending' ? h('span.bdg.st', 'Waiting') : null;
     cards.push(h(`div.card.glass.strong${cls}`, {
