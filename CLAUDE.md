@@ -20,9 +20,16 @@ A first session on a real Snapdragon X PC starts with `docs/windows-agent-brief.
 
 ```bash
 cargo test -p binning-core                 # unit and end-to-end tests (simulated model)
+cargo test -p binning-core --test on_device -- --ignored --nocapture --test-threads=1   # real GenieX, a second drive
 cargo build -p agentic-binning             # the shell; on Linux needs libwebkit2gtk-4.1-dev
 cargo run -p binning-devserver -- --data /tmp/ab-data --projects /tmp/ab-projects
 ```
+
+Tests live beside their module. Files named `*_android_cases.rs` are the Android
+app's own test cases, ported: when one fails, the Android behaviour is the
+reference. `files::faults` (tests only) switches on what a healthy disk never
+does. `tests/on_device.rs` needs real GenieX or a second drive and is skipped
+by default; `docs/windows-agent-brief.md` says what each of its tests proves.
 
 The Windows build itself is checked by the Build workflow on GitHub's
 `windows-11-arm` runner: a cloud session can't download the Windows SDK.
@@ -38,7 +45,9 @@ The Windows build itself is checked by the Build workflow on GitHub's
 - Paths are stored and compared with forward slashes (`paths::norm`), compared
   ignoring case. Don't use `std::path` joins for stored paths.
 - The move engine never overwrites and never deletes an unverified original.
-  Any change there needs a test in `moves.rs`.
+  Any change there needs a test in `moves.rs`. On Windows a move is one
+  `MoveFileExW` call without the replace flag (`files.rs`); don't swap it for
+  `std::fs::rename`, which replaces.
 - Never make a paid Claude call in a test or a check.
 - The simulated model's output must always say it is simulated.
 - Bin Files has no undo: test moves only on files the test created.

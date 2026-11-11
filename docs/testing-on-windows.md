@@ -12,6 +12,12 @@ If the window is blank, run `tauri dev` from `src-tauri` and look at the termina
 
 ## 2. The GenieX commands by hand
 
+There are also tests that run these commands and check the answers for you. They are skipped by default; `docs/windows-agent-brief.md` lists what each one proves:
+
+```powershell
+cargo test -p binning-core --test on_device -- --ignored --nocapture --test-threads=1
+```
+
 Before trusting the app, run what it runs. In PowerShell:
 
 ```powershell

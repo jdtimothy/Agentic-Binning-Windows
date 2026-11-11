@@ -1,27 +1,27 @@
 # Brief for the first session on a Snapdragon X PC
 
-For a coding agent working in this repository on the owner's Windows computer. `docs/testing-on-windows.md` is the same ground as a checklist for a person; this page says what to do, in what order, and what to write down.
+For a coding agent working in this repository on the owner's Windows computer. `docs/testing-on-windows.md` covers the same ground as a checklist for a person. This page says what to run, in what order, what each result means, and what to write down.
 
 ## Where things stand
 
-Everything was written and checked on Linux with a simulated model. The Build workflow compiles and tests on GitHub's `windows-11-arm` runner, so the code builds for Windows. These have never run anywhere:
+Everything was written and checked on Linux with a simulated model. The Build workflow compiles the app and runs the automated tests on GitHub's `windows-11-arm` machine, so the code builds on Windows and the file-move rules hold on NTFS. These have never run anywhere:
 
-- a real `geniex` command (the flags and output shape were read from the CLI's source, not observed),
+- a real `geniex` command (the flags and the output's shape were read from the CLI's source, not observed),
 - the app's window on WebView2,
 - the window's own video frame reader (used when FFmpeg is absent),
-- file moves on NTFS: another drive, a locked file, a long path.
+- file moves between two real drives, and on exFAT.
 
-Expect the first real `geniex infer` to need a fix. That is the purpose of this session.
+Expect the first real `geniex infer` to need a fix. Finding that fix is the purpose of this session.
 
 ## Rules
 
 Read `CLAUDE.md` first. On top of it:
 
-- **No paid Claude call.** Before adding media to any project, read `sortingModel` in `%LOCALAPPDATA%\Agentic Binning\settings.json`. If it is `Claude`, stop and ask the owner. Never set or read the API key.
-- **Bin Files has no undo.** Run it only on a project made in this session from files you created or copied. Never on a folder of the owner's own photos. Record a SHA-256 of every file before and compare after.
-- **GenieX stays a command.** If a flag is wrong, fix the flag in `crates/core/src/geniex.rs` and update the notes at the top of that file. Don't switch to the C API or a library.
+- **No paid Claude call.** The tests below never call Claude. Before adding media to a project in the app itself, read `sortingModel` in `%LOCALAPPDATA%\Agentic Binning\settings.json`. If it is `Claude`, stop and ask the owner. Never set or read the API key.
+- **Bin Files has no undo.** The tests make their own files in temporary folders. By hand, run Bin Files only on a project made in this session from files you created or copied, never on a folder of the owner's photos.
+- **GenieX stays a command.** If a flag or the output's shape is wrong, fix it in `crates/core/src/geniex.rs`, update the notes at the top of that file, and add the real output to its parser tests. Don't switch to the C API or a library.
+- **Evidence before a fix.** When a test fails, save its full output first (it prints the exact command), then run that command in a terminal and save what GenieX prints. Fix the code only after that.
 - Work on the branch you were given. Small commits, one finding each.
-- When a check fails, write down the exact command and its output before changing code.
 
 ## Step 0: tools
 
@@ -39,69 +39,102 @@ ffmpeg -version      # optional
 
 The Rust build needs Visual Studio Build Tools with the ARM64 C++ tools. WebView2 ships with Windows 11.
 
-## Step 1: the tests
+## Step 1: the automated tests
 
 ```powershell
 cargo test -p binning-core
 ```
 
-All must pass. Three tests are Unix-only (`#[cfg(unix)]`) and don't run here; one of them is the test that drives a stand-in GenieX written in Python.
+About 370 tests; all must pass. They use no GenieX and no network. They include the Android app's own test cases (files named `*_android_cases.rs`) and tests only Windows can run (`windows_tests` in `files.rs`, `on_windows` in `moves_android_cases.rs`): a file another program holds, paths over 260 characters, names that differ only in case, reserved names. The same run is green on GitHub's Windows machine, so a failure here is about this PC: report it with its output before going on.
 
-## Step 2: GenieX by hand
+## Step 2: GenieX
 
-Run section 2 of `docs/testing-on-windows.md` exactly: `--version`, `list --format json`, then the one-photo `infer`. Save stdout and stderr of each to files. Check the five rows of that section's table and record a yes or no for each. Then also try:
+These tests are in `crates/core/tests/on_device.rs`. They are skipped by default. Run them one at a time, in order, and keep each one's output:
 
-- the same `infer` with `--grammar-path` pointing at a grammar the app wrote (the Activity log shows the path),
-- a prompt file with several image path lines (how a video is sent),
-- a path with a space in it,
-- `infer` with the text model `LiquidAI/LFM3-1.7B-GGUF:Q4_0` and no image.
+```powershell
+cargo test -p binning-core --test on_device g01 -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object g01.txt
+```
 
-If any differs from what `geniex.rs` expects, fix `geniex.rs` and its parser tests before going on.
+Replace `g01` with each name's first three characters. `--nocapture` prints the reply, its numbers and the exact command. `--test-threads=1` keeps two commands from running on the NPU at once. If `geniex.exe` is not on the PATH, set `$env:AB_GENIEX` to its full path first. `$env:AB_COMPUTE = "cpu"` (or `gpu`) reruns anything off the NPU, which tells an NPU driver problem from a problem in the command.
 
-## Step 3: the core with real GenieX, in a browser
+| Test | What it proves | If it fails |
+| --- | --- | --- |
+| `g01` | `geniex --version` and `geniex list --format json` answer in the shape the app reads, and both models are downloaded. | A missing model: run the `geniex pull` line the failure prints. Models listed but not recognised: the JSON changed; fix `parse_list` and `has_model`. Do this before anything else: every other test needs it. |
+| `g02` | One photo. The command ends by itself, the picture is attached (the reply says "red"), the reply is the app's JSON, it ends with `eos` within 400 tokens. | Hangs: `-i` no longer ends the session. No "red": the image path was not found in the prompt file; run `g05`, then try the path with backslashes. Not JSON: run `g05`. No stop reason: `--verbose` or `--test-mode` output changed; fix `parse_test_mode` or `parse_stdout`. |
+| `g03` | The same with spaces in every path, as under `C:\Users\First Last`. | The CLI's image-path pattern stops at a space. The fix is to keep work files under a path without spaces (the app's `work` folder); note what worked. |
+| `g04` | Eight frames sent as one clip: 2 to 5 actions with `m:ss` times. A note is printed if the reply misses the colour change half way. | No actions or bad times: the grammar is not applied. The note alone means the model may not be given all frames; record it, it is not a failure. |
+| `g05` | A photo without `--grammar-path`. | It passes when `g02` fails: the grammar flag or file is the problem, not the image. Both fail: the image or the model. |
+| `g06` | Stop ends the command within 10 seconds, leaves no `geniex` process, and the next call works. | A process left behind: the CLI starts a helper that outlives it; `GenieCli::cancel` must end the whole process tree. |
+| `g07` | No pass or fail. Prints seconds per photo and how much of that is loading. | Write the numbers down. The app starts `geniex` once per item, so loading is paid every time. If loading is most of the time, say so plainly: it decides whether one command per item is good enough. |
+| `g08` | The sorting model sorts ten items in one call; the grammar makes the reply list each id once. | Wrong ids: `--grammar-path` is not honoured for the text model. A printed "would ask again" note is the small model's judgement, not a fault. |
+| `g09` | A grammar holding existing category names with spaces, an apostrophe and quotes is accepted. | GenieX rejects the grammar: read the grammar file beside the prompt file named in the command; fix `literal_of` in `sorting.rs`. |
+| `g10` | The whole app with real models in its own temporary folders: add seven files, analyze, sort, Bin Files, then compare every file's SHA-256. | It prints the activity log and each item's result. A file missing or changed after Bin Files is the most serious finding possible: stop and report. |
 
-The dev server runs the real core without the window, which makes it easy to drive and to read errors:
+After `g10` passes, the app's core works on this PC. What is left needs the window (Step 4) or a person's eyes.
+
+## Step 3: file moves
+
+Most file-move rules are already covered by Step 1. Three things need this PC.
+
+**Between two drives.** Point the tests at an empty folder on another drive. They make their own folder inside it and remove it afterwards:
+
+```powershell
+$env:AB_OTHER_DRIVE = "D:\ab-test"
+cargo test -p binning-core --test on_device m0 -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object moves.txt
+```
+
+| Test | What it proves |
+| --- | --- |
+| `m01` | Files on the other drive, project on this one. Each file is copied, read back and compared, put in place, and only then is the original deleted. Hashes and times match afterwards; no half copy is left. |
+| `m02` | The other way round: the project on the other drive. |
+| `m03` | A move inside the other drive never replaces a file. |
+
+Run all three once with an internal or USB NTFS drive, and once more with an **exFAT** USB stick if there is one: exFAT has no hard links and coarser file times. If `m01` fails only on exFAT because the file's time differs by a second or two, record the two times; that is a finding about exFAT, not data loss.
+
+Without a second drive these print `SKIPPED`. Say so in the notes; do not count them as passed.
+
+**A run interrupted for real.** The tests simulate a crash by editing the database. Do it once for real, in the dev server (Step 4) on a test project of about 200 copied files: press Bin Files, then end the process from Task Manager while files move. Start it again: the run must resume by itself and finish, and the report must count every file. Compare hashes before and after as `g10` does (`Get-FileHash -Algorithm SHA256`).
+
+**Things only a person can cause.** Once each, on test files: a file open in a video player during Bin Files (skipped, reported, untouched, moved by the next Bin Files); a OneDrive folder as the source (files that are online-only may fail to copy: record what the report says); the PC put to sleep during a run.
+
+## Step 4: the app in a browser, then its window
+
+The dev server runs the real core without the window, which is easy to drive and to read errors from:
 
 ```powershell
 cargo run -p binning-devserver -- --data C:\temp\ab-data --projects C:\temp\ab-projects
 ```
 
-Open `http://localhost:4173`. Settings → GenieX must show the version and both models. Make test media (the Android repository's `scripts/make-test-media.sh` under Git Bash with FFmpeg, or a dozen generated files), copy it somewhere disposable, then: New project → A folder → Create and analyze.
+Open `http://localhost:4173`. Settings → GenieX must show the version and both models. Make test media (the Android repository's `scripts/make-test-media.sh` under Git Bash with FFmpeg, or a dozen generated files), copy it somewhere disposable, then: New project → A folder → Create and analyze. Expected with the Android test set: 7 added; `empty.mp4` and `still_truncated.jpg` end Failed; the rest analyzed, then categorized. For a failed item, Settings → Activity log has the full command.
 
-Expected with the Android test set: 7 added; `empty.mp4` and `still_truncated.jpg` end Failed; the rest analyzed, then categorized. Record seconds per photo and per clip, and tokens per second. Each item starts `geniex` again, so the model load time is paid every item: measure it, because it decides whether one command per item is acceptable.
-
-For a failed item, Settings → Activity log has the full command. Run it in a terminal to see GenieX's own error.
-
-## Step 4: the app itself
+Then the window itself:
 
 ```powershell
 cd src-tauri
 tauri dev
 ```
 
-Only the window has these, so check them here: the folder and file pickers, drag and drop of files onto the window, the title bar and resize, keep-awake during a run, and video frames without FFmpeg (take FFmpeg off the PATH for one H.264 `.mp4` and one HEVC `.mov`). Then build the installer with `tauri build` and install it once.
+Only the window has these, so check them here: the folder and file pickers, dragging files onto the window, the title bar and resizing, keep-awake during a run, and video frames without FFmpeg (take FFmpeg off the PATH and try one H.264 `.mp4` and one HEVC `.mov`). Then build the installer with `tauri build` and install it once.
 
 How it looks is the owner's call. Take screenshots of Analyze, Project Media and each sheet in light and dark, and leave them for the owner.
 
-## Step 5: Bin Files
+## Step 5: tests still worth adding
 
-Section 6 of `docs/testing-on-windows.md`, on the test project only, with hashes before and after. Add the Windows cases: a source on another drive, a file held open by another program, an exFAT drive if one is at hand, a path over 260 characters, and two names that differ only in case.
-
-## Step 6: tests worth adding
-
-Add these as you go, in this order.
-
-1. **Real GenieX tests**, marked `#[ignore]` so `cargo test` and CI skip them (run with `cargo test -p binning-core -- --ignored`). Model them on the Android device tests in `src/androidTest/.../model/`:
-   - `GenieXVisionModelTest`: a photo on the NPU returns JSON that parses; a video's frames come back with timestamps; a missing file fails cleanly; cancelling a call leaves no `geniex` process behind.
-   - `GenieXTextModelTest`: the grammar holds on ten items; ten items get sorted.
-2. **File moves on Windows**, modelled on `MoveFilesDeviceTest`: a rename keeps size, time and content; a rename never replaces an existing file; same-drive is told from cross-drive; a copy's hash matches a read-back. Put them in `moves.rs` under `#[cfg(windows)]` so CI runs them.
-3. **A Windows stand-in for GenieX**, so `drives_the_geniex_command_line` stops being Unix-only.
-4. **Android unit tests for logic this app shares.** The Rust core has 58 tests; the Android app has about 60 test files for the same rules. Port by case list, not line by line, in this order: `MoveEngineTest`, `BinFilesJobTest`, `MovePlannerTest`, `FolderCheckTest`, `LayoutCheckTest` (file safety); `SortValidatorTest`, `CategorizerTest`, `ChunkPlannerTest`, `SortParserTest`; `AnalysisParserTest`, `VideoTimingTest`, `VisionBudgetTest`; `PipelineControllerTest`, `ResortJobTest`; `FtsQueryTest`, `CategoryNamesTest`, `MediaCountsTest`, `MediaStatusTest`; `ClaudeErrorMappingTest` (responses are canned: no network).
-
-   Skip the view-model, Compose, DataStore, notification and Room migration tests: that code has no counterpart here.
+- Once a real `geniex infer` has run, paste its real stdout and stderr into the parser tests in `geniex.rs`, replacing the samples written from the CLI's source.
+- A Windows stand-in for GenieX, so `drives_the_geniex_command_line` in `tests/end_to_end.rs` stops being Unix-only.
+- Android unit tests not yet ported, for logic this app shares: `RegistrarTest`, `MediaScannerTest`, `ProjectRegistryTest`, `ProjectOpenRulesTest`, `SettingsStoreTest`, `ApiKeyStoreTest`, and the database tests `SortDaoTest` and `MoveDaoTest`. Port by case list, not line by line, into a `*_android_cases.rs` file beside the module, as the others are.
+- Skip the view-model, Compose, notification and Room migration tests: that code has no counterpart here.
 
 If an Android case fails against the Rust code, the Android behaviour is the reference unless `CLAUDE.md` or a comment says the difference is deliberate.
 
 ## What to leave behind
 
-`docs/notes/windows-first-run.md` with: tool versions; each step's result; every `geniex` command tried with its output; timings; what was fixed (commit) and what is still open. Update the status paragraph in `README.md` once a real run has worked.
+`docs/notes/windows-first-run.md` with:
+
+- tool versions, the PC's model and chip, and the GenieX and NPU driver versions;
+- one line per test `g01` to `g10` and `m01` to `m03`: passed, failed, or skipped and why;
+- the saved output of every test that failed or printed a NOTE, and of every `geniex` command run by hand;
+- the numbers from `g07`;
+- what was fixed (with the commit) and what is still open.
+
+Update the status paragraph in `README.md` once `g10` has passed.
