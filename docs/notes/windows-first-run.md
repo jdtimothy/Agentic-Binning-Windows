@@ -89,7 +89,7 @@ Also checked: the server stops when the app closes; it ends with the app when th
 | `1d11e9e` | `parse_stdout`, the fallback used when the `--test-mode` line is missing, kept GenieX's status lines (`loading model...`, `Model loaded: ...`, `encoding...`) as part of the reply. The normal path was never affected. The parser tests now include the real v0.10.0 output, and the notes at the top of `geniex.rs` say what was observed |
 | `605a7f4` | `drives_the_geniex_command_line` runs on Windows too: the stand-in for GenieX is now a small Rust program instead of a Python script |
 | `2627069` | One `geniex serve` is kept running, so the model is loaded once per run instead of for every file (above) |
-| next commit | Cards of files that wait to be analyzed were blank until the model reached them (the owner saw this while testing). A background thread now writes their thumbnails as soon as files are added, in the order they will be analyzed: 22 files had theirs about 3 s after they were added. A video without FFmpeg still gets its thumbnail with its analysis |
+| `8e341f8` | Cards of files that wait to be analyzed were blank until the model reached them (the owner saw this while testing). A background thread now writes their thumbnails as soon as files are added, in the order they will be analyzed: 22 files had theirs about 3 s after they were added. A video without FFmpeg still gets its thumbnail with its analysis |
 
 ## Still open
 
