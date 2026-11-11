@@ -270,13 +270,22 @@ pub fn decide(facts: &DatabaseFacts) -> std::result::Result<Option<i32>, &'stati
 }
 
 /// Copies the database aside as `project.db.v<N>.bak` (or `.v<N>.<k>.bak`) before an upgrade,
-/// which is one-way. Never an existing file.
+/// which is one-way. Never over an existing file. A backup already there with the same bytes is
+/// enough: an upgrade that fails and is tried again must not leave one more full copy each time.
 pub fn backup_before_upgrade(db_file: &Path, version: i32) -> Result<PathBuf> {
     let name = db_file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "project.db".into());
     let dir = db_file.parent().unwrap_or(Path::new("."));
+    let source = paths::norm(db_file);
+    let same = |other: &Path| {
+        let other = paths::norm(other);
+        crate::files::size(&other) == crate::files::size(&source) && crate::files::sha256(&other).ok() == crate::files::sha256(&source).ok()
+    };
     let mut candidate = dir.join(format!("{name}.v{version}.bak"));
     let mut k = 1;
     while candidate.exists() {
+        if same(&candidate) {
+            return Ok(candidate);
+        }
         candidate = dir.join(format!("{name}.v{version}.{k}.bak"));
         k += 1;
     }
@@ -793,5 +802,137 @@ mod tests {
         assert!(files::exists(&format!("{cam}/a.png")), "the original stays");
         assert_eq!(shared_with_other_projects(&reg, &one.path, &[format!("{cam}/a.png")]).len(), 0);
         assert_eq!(grouped(1234567), "1,234,567");
+    }
+
+    // The Android app's `RegistrationSummaryTest`.
+
+    fn held(path: &str, project: &str) -> HeldFile {
+        HeldFile { path: path.into(), project: project.into(), listed: true }
+    }
+
+    #[test]
+    fn summary_lists_non_zero_parts_in_order() {
+        let s = RegistrationSummary { added: 1180, duplicates: 15, held: (0..5).map(|i| held(&format!("C:/h{i}"), "La Jolla Trip")).collect(), ..Default::default() };
+        assert_eq!(s.describe(), "1,180 added · 15 already in this project · 5 in another project (La Jolla Trip)");
+        assert_eq!(RegistrationSummary { added: 2, ..Default::default() }.describe(), "2 added");
+        assert_eq!(RegistrationSummary { duplicates: 1, ..Default::default() }.describe(), "1 already in this project");
+        assert_eq!(RegistrationSummary { added: 1, unreadable: 2, ..Default::default() }.describe(), "1 added · 2 couldn't be read");
+        assert_eq!(RegistrationSummary { unreadable: 2, ..Default::default() }.describe(), "2 couldn't be read");
+        assert_eq!(RegistrationSummary::default().describe(), "No photos or videos found");
+    }
+
+    #[test]
+    fn summary_names_every_other_project_once() {
+        let s = RegistrationSummary { held: vec![held("C:/a", "A"), held("C:/b", "B"), held("C:/c", "A")], ..Default::default() };
+        assert_eq!(s.describe(), "3 in other projects (A, B)");
+    }
+
+    #[test]
+    fn numbers_get_grouping_separators() {
+        for (n, text) in [(0, "0"), (999, "999"), (1000, "1,000"), (12345, "12,345"), (1234567, "1,234,567")] {
+            assert_eq!(grouped(n), text);
+        }
+    }
+
+    // The Android app's `ProjectOpenRulesTest`.
+
+    fn good() -> DatabaseFacts {
+        DatabaseFacts {
+            exists: true,
+            readable: true,
+            user_version: Some(PROJECT_DB_VERSION),
+            identity_hash: db::known_hash(PROJECT_DB_VERSION).map(str::to_string),
+            meta_name: Some("Hawaii Photos".into()),
+            has_meta: true,
+            quick_check_ok: true,
+        }
+    }
+
+    fn at_version(version: i32) -> DatabaseFacts {
+        DatabaseFacts { user_version: Some(version), identity_hash: db::known_hash(version).map(str::to_string), ..good() }
+    }
+
+    #[test]
+    fn only_current_and_older_schemas_open() {
+        assert_eq!(decide(&good()), Ok(None), "the current version opens without a backup");
+        for older in 1..PROJECT_DB_VERSION {
+            assert_eq!(decide(&at_version(older)), Ok(Some(older)), "version {older} opens after a backup");
+        }
+        assert_eq!(decide(&DatabaseFacts::default()), Err(refusal::NO_PROJECT));
+        // Unreadable or damaged.
+        assert_eq!(decide(&DatabaseFacts { exists: true, ..Default::default() }), Err(refusal::CANT_OPEN));
+        assert_eq!(decide(&DatabaseFacts { quick_check_ok: false, ..good() }), Err(refusal::CANT_OPEN));
+        assert_eq!(decide(&DatabaseFacts { user_version: None, ..good() }), Err(refusal::CANT_OPEN));
+        // Newer, whatever its hash.
+        assert_eq!(decide(&DatabaseFacts { user_version: Some(PROJECT_DB_VERSION + 1), identity_hash: Some("anything".into()), ..good() }), Err(refusal::NEWER));
+        // Foreign: no hash, another hash, or the current version's hash on an older file.
+        assert_eq!(decide(&DatabaseFacts { identity_hash: None, ..good() }), Err(refusal::CANT_OPEN));
+        assert_eq!(decide(&DatabaseFacts { identity_hash: Some("0000".into()), ..good() }), Err(refusal::CANT_OPEN));
+        assert_eq!(decide(&DatabaseFacts { user_version: Some(2), ..good() }), Err(refusal::CANT_OPEN));
+        // No project row.
+        assert_eq!(decide(&DatabaseFacts { has_meta: false, meta_name: None, ..good() }), Err(refusal::CANT_OPEN));
+    }
+
+    #[test]
+    fn refusal_messages_stay_short() {
+        assert_eq!(refusal::NO_PROJECT, "No project in this folder");
+        assert_eq!(refusal::NEWER, "Made with a newer app version. Update to open it.");
+        assert!([refusal::NO_PROJECT, refusal::CANT_OPEN, refusal::NEWER].iter().all(|m| m.len() <= 60));
+    }
+
+    fn file_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_backup_never_overwrites_an_earlier_one() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("project.db");
+        std::fs::write(&db, b"version three").unwrap();
+        std::fs::write(d.path().join("project.db.v3.bak"), b"earlier").unwrap();
+        let backup = backup_before_upgrade(&db, 3).unwrap();
+        assert_eq!(backup.file_name().unwrap(), "project.db.v3.1.bak");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"version three");
+        assert_eq!(std::fs::read(d.path().join("project.db.v3.bak")).unwrap(), b"earlier");
+    }
+
+    /// An upgrade that is tried again must not leave one more full copy every time.
+    #[test]
+    fn an_identical_backup_is_enough_and_changed_contents_get_another() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("project.db");
+        std::fs::write(&db, b"version three").unwrap();
+        assert_eq!(backup_before_upgrade(&db, 3).unwrap().file_name().unwrap(), "project.db.v3.bak");
+        assert_eq!(backup_before_upgrade(&db, 3).unwrap().file_name().unwrap(), "project.db.v3.bak");
+        assert_eq!(file_names(d.path()), vec!["project.db", "project.db.v3.bak"]);
+        // The same version with other contents (an older build ran since): that is new data to keep.
+        std::fs::write(&db, b"version three and more").unwrap();
+        assert_eq!(backup_before_upgrade(&db, 3).unwrap().file_name().unwrap(), "project.db.v3.1.bak");
+        assert_eq!(backup_before_upgrade(&db, 3).unwrap().file_name().unwrap(), "project.db.v3.1.bak");
+        assert_eq!(file_names(d.path()), vec!["project.db", "project.db.v3.1.bak", "project.db.v3.bak"]);
+        assert_eq!(std::fs::read(d.path().join("project.db.v3.bak")).unwrap(), b"version three");
+    }
+
+    #[test]
+    fn picking_the_binning_folder_means_its_project() {
+        assert_eq!(project_dir_of("C:/Pictures/Hawaii/.binning"), "C:/Pictures/Hawaii");
+        assert_eq!(project_dir_of("C:/Pictures/Hawaii"), "C:/Pictures/Hawaii");
+    }
+
+    #[test]
+    fn a_folder_inside_or_containing_a_project_is_told_apart_from_a_neighbour() {
+        let d = tempfile::tempdir().unwrap();
+        let root = norm(d.path());
+        std::fs::create_dir_all(format!("{root}/Hawaii/Beach")).unwrap();
+        std::fs::create_dir_all(format!("{root}/HawaiiTrip")).unwrap();
+        let listed = vec![ProjectRef { name: "Hawaii Photos".into(), path: format!("{root}/Hawaii") }];
+        assert_eq!(placement(&format!("{root}/HawaiiTrip/../Hawaii/"), &listed), Placement::Listed(listed[0].clone()));
+        assert_eq!(placement(&format!("{root}/Hawaii/Beach"), &listed), Placement::Inside(listed[0].clone()));
+        assert_eq!(placement(&root, &listed), Placement::Contains(listed[0].clone()));
+        // A name that merely starts the same is a neighbour, not inside.
+        assert_eq!(placement(&format!("{root}/HawaiiTrip"), &listed), Placement::Unlisted);
+        assert_eq!(placement(&format!("{root}/Hawaii/not made yet"), &listed), Placement::Inside(listed[0].clone()));
     }
 }

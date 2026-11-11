@@ -524,4 +524,50 @@ mod tests {
         assert_eq!(image::image_dimensions(&m.image_paths[3]).unwrap(), (256, 256));
         assert!(Path::new(&m.thumbnail_path).is_file());
     }
+
+    // The Android app's `MediaScannerTest`.
+
+    fn touch(root: &str, files: &[&str]) {
+        for f in files {
+            let path = format!("{root}/{f}");
+            std::fs::create_dir_all(crate::paths::parent(&path)).unwrap();
+            std::fs::write(&path, b"x").unwrap();
+        }
+    }
+
+    fn names(found: Vec<String>) -> Vec<String> {
+        found.iter().map(|p| crate::paths::file_name(p).to_string()).collect()
+    }
+
+    #[test]
+    fn scan_finds_media_recursively_skipping_hidden_and_excluded() {
+        let d = tempfile::tempdir().unwrap();
+        let root = crate::paths::norm(d.path());
+        touch(&root, &["x.JPG", "y.mp4", "notes.txt", ".hidden/z.jpg", ".binning/t.jpg", "sub/w.mov", "other/q.jpg"]);
+        assert_eq!(names(scan(&root, &|dir| dir.ends_with("/other"))), vec!["w.mov", "x.JPG", "y.mp4"]);
+        assert_eq!(names(scan(&root, &|_| false)), vec!["q.jpg", "w.mov", "x.JPG", "y.mp4"]);
+        assert!(scan(&format!("{root}/nope"), &|_| false).is_empty());
+    }
+
+    /// A DNG is an ordinary photo with no pairing to a same-named JPG (the owner's decision).
+    #[test]
+    fn scan_finds_a_dng_next_to_its_jpg_twin_as_separate_files() {
+        let d = tempfile::tempdir().unwrap();
+        let root = crate::paths::norm(d.path());
+        touch(&root, &["raw/IMG_1.dng", "raw/IMG_1.jpg", "raw/IMG_2.DNG"]);
+        assert_eq!(names(scan(&format!("{root}/raw"), &|_| false)), vec!["IMG_1.dng", "IMG_1.jpg", "IMG_2.DNG"]);
+    }
+
+    #[test]
+    fn kind_of_is_case_insensitive_by_extension() {
+        for photo in ["a/PXL_1.dng", "a/PXL_1.DNG", "a/B.HEIC", "a.webp"] {
+            assert_eq!(kind_of(photo), Some(ItemKind::Photo), "{photo}");
+        }
+        for video in ["a/clip.MoV", "clip.3gp"] {
+            assert_eq!(kind_of(video), Some(ItemKind::Video), "{video}");
+        }
+        for neither in ["notes.txt", "noextension", "folder.jpg/readme"] {
+            assert_eq!(kind_of(neither), None, "{neither}");
+        }
+    }
 }
