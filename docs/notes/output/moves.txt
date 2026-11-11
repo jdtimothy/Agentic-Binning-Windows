@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests\on_device.rs (target\debug\deps\on_device-69ec5c20fb23c614.exe)
+
+running 3 tests
+test m01_bin_files_copies_from_another_drive_and_checks_every_file ... SKIPPED m01: set AB_OTHER_DRIVE to an empty folder on another drive, for example D:\ab-test
+ok
+test m02_a_project_on_another_drive_takes_files_from_this_one ... SKIPPED m02: set AB_OTHER_DRIVE to an empty folder on another drive, for example D:\ab-test
+ok
+test m03_moves_inside_the_other_drive_never_replace ... SKIPPED m03: set AB_OTHER_DRIVE to an empty folder on another drive, for example D:\ab-test
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+

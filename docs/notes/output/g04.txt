@@ -1,0 +1,33 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests\on_device.rs (target\debug\deps\on_device-69ec5c20fb23c614.exe)
+
+running 1 test
+test g04_video_frames_get_actions_with_times ... prompt file:
+Video: the 8 images are frames of one clip in time order, taken at these timestamps: 0:00, 0:00.5, 0:01, 0:01.5, 0:02, 0:02.5, 0:03, 0:03.5.
+Describe this video clip and how it changes over time.
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/100/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/101/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/102/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/103/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/104/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/105/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/106/image.jpg
+C:/Users/USER/AppData/Local/Temp/.tmpektl6g/work/107/image.jpg
+
+command: geniex --skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0 --compute npu --nctx 16384 --max-tokens 520 --think=false --temperature 0.1 --top-k 50 --top-p 1.0 --min-p 0.000001 --repetition-penalty 1.1 --grammar-path C:/Users/USER/AppData/Local/Temp/.tmpektl6g/scratch/grammar.gbnf -s "You catalogue a personal photo and video library. Look carefully and report only what is visible. Reply with one JSON object and nothing else, with these keys: \"description\": 1-3 plain sentences: the subject, the setting, and anything notable. \"actions\": for a video, 2-5 entries {\"t\": \"m:ss\", \"text\": \"what happens\"} in time order, using the timestamps shown; for a photo, []. \"tags\": 5-10 short lowercase keywords for searching (subjects, setting, activity, time of day). \"suggested_name\": 2-5 words naming the shot, like \"Sea lions on the rocks\". No file extension, no date. \"shot_type\": \"wide\", \"medium\" or \"close\"." -i C:/Users/USER/AppData/Local/Temp/.tmpektl6g/scratch/prompt.txt
+reply:   {
+  "description": "The video shows a red square centered on a white background. The frames are static and do not change over time.",
+  "actions": [
+    {"t": "0:00", "text": "A red square is centered on a white background."},
+    {"t": "0:00", "text": "The red square remains unchanged throughout the clip."}
+  ],
+  "tags": ["red square", "white background", "static image"],
+  "suggested_name": "Red square on white background",
+  "shot_type": "close"
+}
+numbers: 19.5 s in all, stop reason "eos", 121 tokens, 60.2 tokens a second, first token after 5358 ms, streamed in 79 pieces
+NOTE: the reply does not mention both red and blue, so the model may be seeing only some of the 8 frames.
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 22.73s
+

@@ -1,0 +1,51 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests\on_device.rs (target\debug\deps\on_device-69ec5c20fb23c614.exe)
+
+running 1 test
+test g10_the_app_analyzes_sorts_and_bins_a_small_project ... analysis and sorting took 116 s
+state: PipelineState { phase: Idle, project: Some("C:/Users/USER/AppData/Local/Temp/.tmpxMEVWx/Projects/On Device"), current_item_id: None, partial: None, last_profile: Some(Profile { stop_reason: "eos", ttft_ms: 2551.224, prompt_tokens: 440, generated_tokens: 53, decoding_speed: 69.98824725659276 }), pending: 0, analyzed: 6, total: 7, failed: 1, download_fraction: None, error: None, frames_ready: 0, frames_total: 0, sort_done: 0, sort_total: 0, sort_notice: None, move_progress: None, move_outcome: None, move_message: None, move_ended: 0 }
+activity log: {
+  "lines": [
+    "12:04:08 Opened On Device",
+    "12:04:08 Added media to On Device: 7 added",
+    "12:04:24 Ran: geniex --skip-update --verbose --test-mode infer LiquidAI/LFM3-VL-2B-GGUF:Q4_0 --compute npu --nctx 16384 --max-tokens 400 --think=false --temperature 0.1 --top-k 50 --top-p 1.0 --min-p 0.000001 --repetition-penalty 1.1 --grammar-path C:/Users/USER/AppData/Local/Temp/.tmpxMEVWx/data/scratch/grammar.gbnf -s \"You catalogue a personal photo and video library. Look carefully and report only what is visible. Reply with one JSON object and nothing else, with these keys: \\\"description\\\": 1-3 plain sentences: the subject, the setting, and anything notable. \\\"actions\\\": for a video, 2-5 entries {\\\"t\\\": \\\"m:ss\\\", \\\"text\\\": \\\"what happens\\\"} in time order, using the timestamps shown; for a photo, []. \\\"tags\\\": 5-10 short lowercase keywords for searching (subjects, setting, activity, time of day). \\\"suggested_name\\\": 2-5 words naming the shot, like \\\"Sea lions on the rocks\\\". No file extension, no date. \\\"shot_type\\\": \\\"wide\\\", \\\"medium\\\" or \\\"close\\\".\" -i C:/Users/USER/AppData/Local/Temp/.tmpxMEVWx/data/scratch/prompt.txt",
+    "12:05:46 Cannot prepare item 7 (broken.jpg): FFmpeg could not read the file"
+  ]
+}
+IMG_0.png    Sorted     Squares          Minimalist Red Square
+IMG_1.png    Sorted     Squares          Minimalist Blue Square
+IMG_2.png    Sorted     Squares          Minimalist Green Square
+IMG_3.png    Sorted     Squares          Minimalist Yellow Square
+IMG_4.png    Sorted     Squares          Geometric Green Square
+IMG_5.png    Sorted     Squares          Simple Yellow Square
+broken.jpg   Failed     -                -
+report: {
+  "becameMissing": 0,
+  "checkOk": true,
+  "copiedShared": 0,
+  "folders": 1,
+  "headline": "6 files binned into 1 category folder",
+  "inPlace": 0,
+  "kind": "Bin",
+  "lastMoved": "Simple Yellow Square.png",
+  "leftOut": [
+    {
+      "itemId": 7,
+      "name": "broken.jpg",
+      "reason": "Failed",
+      "why": "Couldn't read this file."
+    }
+  ],
+  "message": null,
+  "moved": 6,
+  "numbered": [],
+  "removedFolders": [],
+  "runId": 1,
+  "skipped": [],
+  "state": "Done",
+  "stillToMove": 0
+}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 120.64s
+

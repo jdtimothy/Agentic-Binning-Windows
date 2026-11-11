@@ -13,7 +13,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 
 *These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
 
-> **Status: built and tested without a Snapdragon X PC.** The core logic has about 430 automated tests, most of them the Android app's own test cases run against this code. They pass on Linux and on GitHub's Windows ARM64 machine, with a simulated model. Nothing has run on a Snapdragon X PC yet, and no real `geniex` command has been executed. The tests that need the real thing are written and wait in `crates/core/tests/on_device.rs`. Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
+> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Not yet checked: moves between two drives and on exFAT, and the window's pickers, drag and drop and its own video frame reader. One photo takes about 16 seconds, most of it GenieX loading the model. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
 
 ## What you need
 

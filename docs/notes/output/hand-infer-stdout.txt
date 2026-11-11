@@ -1,0 +1,18 @@
+🌍loading model...
+Model loaded: runtime=llama_cpp compute=npu ngl=-1 nctx=16384
+> Describe this photo.
+. C:/Users/USER/AppData/Local/Temp/claude/36481c8f5ed7ba72/ad726615-a985-434c-9954-accd7a8ff66e/scratchpad/hand/test.jpg
+🌍encoding...
+The image shows a solid red square centered on a light gray background. The square is the only element present.
+
+total time:     2.911081s
+ttft:           2.568213s
+media time:     2.411717s
+prompt time:    0.154753s
+prompt tokens:  284 token(s)
+prompt speed:   1835.182517 tok/s
+decode time:    0.344611s
+decode tokens:  22 token(s)
+decode speed:   63.840098 tok/s
+stop reason:    eos
+
