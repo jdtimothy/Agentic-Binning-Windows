@@ -1301,9 +1301,9 @@ impl App {
                 }
                 self.keys.set(&a.key).map_err(Error::msg)?;
                 // Saving a key switches sorting to Claude unless the user already chose a model.
-                let mut s = self.settings();
-                if !s.sorting_model_chosen_by_user {
-                    s.sorting_model = SortChoice::Claude;
+                let before = self.settings();
+                let s = before.clone().after_key_saved();
+                if s != before {
                     self.settings_store.save(&s)?;
                     *self.settings.lock() = s;
                 }

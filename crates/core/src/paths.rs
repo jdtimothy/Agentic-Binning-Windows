@@ -25,6 +25,38 @@ pub fn norm(p: impl AsRef<Path>) -> String {
     trimmed.to_string()
 }
 
+/// `path` (normalized, absolute) with its `.` and `..` parts resolved by name alone. A `..` never
+/// climbs above the root.
+fn without_dots(path: &str) -> String {
+    let (root, rest) = match path.find('/') {
+        Some(i) if path.starts_with("//") => {
+            // //server/share stays whole.
+            let mut parts = path[2..].splitn(3, '/');
+            let (server, share) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+            let _ = i;
+            (format!("//{server}/{share}"), parts.next().unwrap_or("").to_string())
+        }
+        Some(i) => (path[..=i].to_string(), path[i + 1..].to_string()),
+        None => return path.to_string(),
+    };
+    let mut kept: Vec<&str> = Vec::new();
+    for part in rest.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                kept.pop();
+            }
+            p => kept.push(p),
+        }
+    }
+    let root = root.trim_end_matches('/');
+    if kept.is_empty() {
+        norm(format!("{root}/"))
+    } else {
+        format!("{root}/{}", kept.join("/"))
+    }
+}
+
 /// The canonical form of `path` (symlinks, `..` and Windows short names resolved), normalized.
 /// A path that does not exist yet is resolved through its nearest existing ancestor, so a new
 /// folder compares equal to its parent's spelling.
@@ -32,7 +64,12 @@ pub fn canonical(path: &str) -> String {
     if let Ok(p) = std::fs::canonicalize(path) {
         return norm(p);
     }
-    let absolute = norm(std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path)));
+    // `.` and `..` are taken out by name first, as Windows does: `x/../A` is `A` even when `x`
+    // does not exist.
+    let absolute = without_dots(&norm(std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path))));
+    if let Ok(p) = std::fs::canonicalize(&absolute) {
+        return norm(p);
+    }
     let mut head = absolute.as_str();
     loop {
         let up = parent(head);
@@ -114,5 +151,18 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let real = canonical(&norm(d.path()));
         assert_eq!(canonical(&format!("{}/not/there.jpg", norm(d.path()))), format!("{real}/not/there.jpg"));
+    }
+
+    #[test]
+    fn dots_are_resolved_by_name() {
+        assert_eq!(without_dots("/a/x/../b/./c"), "/a/b/c");
+        assert_eq!(without_dots("/../../a"), "/a");
+        assert_eq!(without_dots("C:/Users/me/x/../Pictures/"), "C:/Users/me/Pictures");
+        assert_eq!(without_dots("C:/.."), "C:/");
+        assert_eq!(without_dots("//server/share/a/../b"), "//server/share/b");
+        assert_eq!(without_dots("/a/b"), "/a/b");
+        let d = tempfile::tempdir().unwrap();
+        let root = canonical(&norm(d.path()));
+        assert_eq!(canonical(&format!("{root}/missing/../also missing/file.jpg")), format!("{root}/also missing/file.jpg"));
     }
 }

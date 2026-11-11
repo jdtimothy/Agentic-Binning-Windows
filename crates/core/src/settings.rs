@@ -38,6 +38,18 @@ fn default_sorting() -> SortChoice {
     SortChoice::Lfm3
 }
 
+/// A stored choice this build doesn't know (a model that was offered once and dropped, a value
+/// from a newer build) reads as the default for that one setting; the other settings are kept.
+fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+fn sorting_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SortChoice, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_else(|_| default_sorting()))
+}
+
 fn default_compute() -> String {
     "npu".into()
 }
@@ -45,20 +57,20 @@ fn default_compute() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub theme_mode: ThemeMode,
     /// Keeps the computer awake while a run is in progress.
     #[serde(default)]
     pub keep_awake: bool,
     /// Offline-capable default; switches to Claude when a key is first saved.
-    #[serde(default = "default_sorting")]
+    #[serde(default = "default_sorting", deserialize_with = "sorting_or_default")]
     pub sorting_model: SortChoice,
     #[serde(default = "default_frames")]
     pub max_frames_per_clip: u32,
     /// True once the user picked a sorting model themselves; saving a key then no longer changes it.
     #[serde(default)]
     pub sorting_model_chosen_by_user: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub backend: Backend,
     /// Where `geniex` is, when it is not on the PATH.
     #[serde(default)]
@@ -78,6 +90,14 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// Saving a Claude key switches sorting to Claude, unless the user already chose a model.
+    pub fn after_key_saved(mut self) -> Self {
+        if !self.sorting_model_chosen_by_user {
+            self.sorting_model = SortChoice::Claude;
+        }
+        self
+    }
+
     fn sanitized(mut self) -> Self {
         self.max_frames_per_clip = snap_frame_cap(self.max_frames_per_clip);
         if !["npu", "gpu", "cpu"].contains(&self.compute.as_str()) {
@@ -133,6 +153,9 @@ impl ApiKeyStore {
 
     #[cfg(windows)]
     pub fn set(&self, key: &str) -> Result<(), String> {
+        if key.trim().is_empty() {
+            return Err("Paste the key first".into());
+        }
         keyring::Entry::new(KEY_SERVICE, KEY_ACCOUNT).and_then(|e| e.set_password(key.trim())).map_err(|e| format!("Couldn't save the key: {e}"))
     }
 
@@ -154,6 +177,9 @@ impl ApiKeyStore {
     pub fn set(&self, key: &str) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         use std::io::Write;
+        if key.trim().is_empty() {
+            return Err("Paste the key first".into());
+        }
         if let Some(dir) = self.fallback_file.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -214,5 +240,73 @@ mod tests {
         assert_eq!(keys.masked().as_deref(), Some("••••1234"));
         keys.clear().unwrap();
         assert!(keys.masked().is_none());
+    }
+
+    // The Android app's `SettingsStoreTest` and the parts of `ApiKeyStoreTest` that are not
+    // about Android's Keystore. The key store itself is only exercised off Windows: on Windows
+    // it is the signed-in user's real Credential Manager, which a test must never write to.
+
+    fn store() -> (tempfile::TempDir, SettingsStore) {
+        let d = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(d.path().join("settings.json"));
+        (d, store)
+    }
+
+    #[test]
+    fn defaults_are_lfm_and_16() {
+        let (_d, store) = store();
+        let s = store.load();
+        assert_eq!(s, AppSettings::default());
+        assert_eq!((s.sorting_model, s.max_frames_per_clip, s.sorting_model_chosen_by_user, s.keep_awake, s.theme_mode), (SortChoice::Lfm3, 16, false, false, ThemeMode::System));
+    }
+
+    #[test]
+    fn frame_cap_snaps_to_options() {
+        // 20 and 40 are ties, which snap down.
+        for (asked, stored) in [(18, 16), (44, 48), (100, 64), (8, 16), (20, 16), (40, 32), (24, 24)] {
+            let (_d, store) = store();
+            store.save(&AppSettings { max_frames_per_clip: asked, ..Default::default() }).unwrap();
+            assert_eq!(store.load().max_frames_per_clip, stored, "{asked}");
+        }
+    }
+
+    #[test]
+    fn a_saved_key_switches_to_claude_only_when_the_user_has_not_chosen() {
+        let fresh = AppSettings::default().after_key_saved();
+        assert_eq!((fresh.sorting_model, fresh.sorting_model_chosen_by_user), (SortChoice::Claude, false));
+        let chosen = AppSettings { sorting_model_chosen_by_user: true, ..Default::default() }.after_key_saved();
+        assert_eq!(chosen.sorting_model, SortChoice::Lfm3);
+    }
+
+    #[test]
+    fn sorting_choices_are_claude_and_lfm_only() {
+        assert_eq!(serde_json::to_string(&[SortChoice::Claude, SortChoice::Lfm3]).unwrap(), r#"["Claude","Lfm3_1_7B"]"#);
+    }
+
+    /// A choice that was offered once and dropped falls back by itself; the rest is kept.
+    #[test]
+    fn an_unknown_stored_choice_falls_back_without_losing_the_other_settings() {
+        let (d, store) = store();
+        std::fs::write(d.path().join("settings.json"), r#"{"sortingModel":"Qwen3_4B","themeMode":"Sepia","backend":"Cloud","maxFramesPerClip":48,"keepAwake":true,"compute":"quantum"}"#).unwrap();
+        let s = store.load();
+        assert_eq!((s.sorting_model, s.theme_mode, s.backend), (SortChoice::Lfm3, ThemeMode::System, Backend::Auto));
+        assert_eq!((s.max_frames_per_clip, s.keep_awake, s.compute.as_str()), (48, true, "npu"));
+        // A value of the wrong kind too.
+        std::fs::write(d.path().join("settings.json"), r#"{"sortingModel":7,"themeMode":"Dark"}"#).unwrap();
+        assert_eq!((store.load().sorting_model, store.load().theme_mode), (SortChoice::Lfm3, ThemeMode::Dark));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_blank_key_is_rejected_and_a_key_is_trimmed() {
+        let d = tempfile::tempdir().unwrap();
+        let keys = ApiKeyStore::new(d.path());
+        assert!(keys.set("   ").is_err());
+        assert_eq!(keys.get(), None);
+        keys.set("  sk-ant-fake-1234  ").unwrap();
+        assert_eq!(keys.get().as_deref(), Some("sk-ant-fake-1234"));
+        keys.clear().unwrap();
+        keys.clear().unwrap();
+        assert_eq!(keys.get(), None);
     }
 }

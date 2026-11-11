@@ -701,6 +701,10 @@ fn copy_one(root: &str, moving: &str, db: &ProjectDb, ffmpeg: &Ffmpeg, file: &He
 }
 
 #[cfg(test)]
+#[path = "projects_android_cases.rs"]
+mod android_cases;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::paths::norm;
