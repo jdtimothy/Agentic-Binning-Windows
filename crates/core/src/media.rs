@@ -314,6 +314,21 @@ fn decode_still_ffmpeg(path: &str, ffmpeg: &str, work_dir: &str) -> std::result:
     img
 }
 
+/// Writes the frame of `path` at `time_ms` to `thumb`, unpadded, longest edge 512 px.
+fn video_thumbnail(ffmpeg: &str, path: &str, time_ms: i64, thumb: &str) -> bool {
+    quiet_command(ffmpeg)
+        .args(["-v", "error", "-y", "-ss", &format!("{:.3}", time_ms as f64 / 1000.0), "-i"])
+        .arg(path)
+        .args(["-frames:v", "1", "-q:v", "4", "-vf", &format!("scale=w={THUMB_EDGE}:h={THUMB_EDGE}:force_original_aspect_ratio=decrease")])
+        .arg(thumb)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        && Path::new(thumb).is_file()
+}
+
 /// Decodes a photo or samples a video into square JPEGs under `<work_dir>/<item id>/` and writes
 /// a 512 px thumbnail to `<thumbs_dir>/<item id>.jpg`.
 pub struct MediaPreparer {
@@ -326,6 +341,56 @@ pub struct MediaPreparer {
 impl MediaPreparer {
     pub fn thumb_path(&self, item_id: i64) -> String {
         format!("{}/{item_id}.jpg", self.thumbs_dir)
+    }
+
+    /// Writes only the item's thumbnail, for an item still waiting to be analyzed, so the window
+    /// can show what is coming. Returns whether one was written: not when it exists already, and
+    /// not for a video without FFmpeg (its thumbnail then comes with its analysis). It is
+    /// written beside its final name and renamed, so it never meets `prepare` writing the same file.
+    pub fn thumbnail(&self, item_id: i64, path: &str, kind: ItemKind, duration_ms: Option<i64>, max_frames: usize) -> std::result::Result<bool, PrepareError> {
+        let thumb = self.thumb_path(item_id);
+        if Path::new(&thumb).is_file() {
+            return Ok(false);
+        }
+        if !Path::new(path).is_file() {
+            return Err(PrepareError::Missing);
+        }
+        std::fs::create_dir_all(&self.thumbs_dir).map_err(|e| PrepareError::WorkFile(format!("Cannot create {}: {e}", self.thumbs_dir)))?;
+        let part = format!("{}/{item_id}.part.jpg", self.thumbs_dir);
+        let written = match kind {
+            ItemKind::Photo => {
+                let decoded = match decode_still(path) {
+                    Ok(img) => img,
+                    Err(first) => match self.ffmpeg.ffmpeg.as_deref() {
+                        Some(ff) => decode_still_ffmpeg(path, ff, &self.thumbs_dir).map_err(PrepareError::Decode)?,
+                        None => return Err(PrepareError::Decode(first)),
+                    },
+                };
+                save_thumbnail(&decoded, &part).map(|_| true)
+            }
+            ItemKind::Video => match self.ffmpeg.ffmpeg.as_deref() {
+                Some(ff) => {
+                    // The frame analysis will use: the first of the clip's sample times.
+                    let duration = duration_ms.filter(|d| *d > 0).or_else(|| probe_video(path, &self.ffmpeg).and_then(|m| m.duration_ms)).unwrap_or(0);
+                    let t = timing::sample_times_ms(duration, max_frames).first().copied().unwrap_or(0);
+                    if video_thumbnail(ff, path, t, &part) {
+                        Ok(true)
+                    } else {
+                        Err(PrepareError::Decode(format!("No frame could be read from {}", paths::file_name(path))))
+                    }
+                }
+                None => Ok(false),
+            },
+        };
+        if matches!(written, Ok(true)) && (Path::new(&thumb).is_file() || std::fs::rename(&part, &thumb).is_err()) {
+            // `prepare` got there first; its thumbnail stays.
+            let _ = std::fs::remove_file(&part);
+            return Ok(false);
+        }
+        if written.is_err() {
+            let _ = std::fs::remove_file(&part);
+        }
+        written
     }
 
     /// A video yields at most `max_frames` frames; `on_frame` is called after each is written:
@@ -413,20 +478,8 @@ impl MediaPreparer {
                 let _ = std::fs::remove_file(&file);
                 continue;
             }
-            if out.is_empty() {
-                let ok = quiet_command(ffmpeg)
-                    .args(["-v", "error", "-y", "-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"])
-                    .arg(path)
-                    .args(["-frames:v", "1", "-q:v", "4", "-vf", &format!("scale=w={THUMB_EDGE}:h={THUMB_EDGE}:force_original_aspect_ratio=decrease")])
-                    .arg(thumb)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if !ok {
-                    return Err(PrepareError::WorkFile(format!("Cannot write {thumb}")));
-                }
+            if out.is_empty() && !video_thumbnail(ffmpeg, path, *t, thumb) {
+                return Err(PrepareError::WorkFile(format!("Cannot write {thumb}")));
             }
             out.push((file, *t));
             on_frame(out.len(), times.len());
@@ -523,6 +576,33 @@ mod tests {
         assert_eq!(seen.get(), 4);
         assert_eq!(image::image_dimensions(&m.image_paths[3]).unwrap(), (256, 256));
         assert!(Path::new(&m.thumbnail_path).is_file());
+        // A waiting clip gets its thumbnail alone, from the same first frame.
+        assert!(p.thumbnail(2, &clip, ItemKind::Video, meta.duration_ms, 4).unwrap());
+        assert_eq!(image::image_dimensions(p.thumb_path(2)).unwrap(), image::image_dimensions(&m.thumbnail_path).unwrap());
+        assert!(!Path::new(&format!("{root}/work/2")).exists(), "no work files for a thumbnail");
+    }
+
+    #[test]
+    fn a_waiting_item_gets_only_its_thumbnail() {
+        let d = tempfile::tempdir().unwrap();
+        let root = paths::norm(d.path());
+        let src = format!("{root}/wide.png");
+        image::RgbImage::from_pixel(1600, 400, image::Rgb([200, 40, 40])).save(&src).unwrap();
+        let p = MediaPreparer { work_dir: format!("{root}/work"), thumbs_dir: format!("{root}/thumbs"), ffmpeg: Ffmpeg::default(), grabber: None };
+        assert!(p.thumbnail(7, &src, ItemKind::Photo, None, 16).unwrap());
+        assert_eq!(image::image_dimensions(p.thumb_path(7)).unwrap(), (512, 128));
+        assert_eq!(std::fs::read_dir(format!("{root}/thumbs")).unwrap().count(), 1, "nothing is left beside the thumbnail");
+        assert!(!Path::new(&format!("{root}/work")).exists());
+        // One that exists is kept as it is: analysis may have written it.
+        std::fs::write(p.thumb_path(7), b"kept").unwrap();
+        assert!(!p.thumbnail(7, &src, ItemKind::Photo, None, 16).unwrap());
+        assert_eq!(std::fs::read(p.thumb_path(7)).unwrap(), b"kept");
+        // Files that can't give one say so and leave nothing behind.
+        assert!(matches!(p.thumbnail(8, &format!("{root}/nope.jpg"), ItemKind::Photo, None, 16), Err(PrepareError::Missing)));
+        std::fs::write(format!("{root}/bad.jpg"), b"not an image").unwrap();
+        assert!(matches!(p.thumbnail(9, &format!("{root}/bad.jpg"), ItemKind::Photo, None, 16), Err(PrepareError::Decode(_))));
+        assert!(!p.thumbnail(10, &src, ItemKind::Video, None, 16).unwrap(), "a video waits for its analysis without FFmpeg");
+        assert_eq!(std::fs::read_dir(format!("{root}/thumbs")).unwrap().count(), 1);
     }
 
     // The Android app's `MediaScannerTest`.

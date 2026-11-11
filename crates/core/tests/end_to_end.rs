@@ -202,6 +202,18 @@ fn stop_is_remembered_and_resume_finishes() {
     assert!(state.error.is_none());
     assert!(state.pending > 0, "the stopped item went back to pending");
     assert_eq!(h.call("grid", json!({}))["counts"]["analyzing"], 0);
+    // Items still waiting already have their thumbnails, so the window can show what is next.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let grid = h.call("grid", json!({}));
+        let rows = grid["rows"].as_array().unwrap();
+        assert!(rows.iter().any(|r| r["status"] == "Pending"));
+        if rows.iter().all(|r| r["thumb"].is_string() && r["thumbAt"].as_u64().is_some_and(|t| t > 0)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "waiting items never got thumbnails: {rows:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     h.call("analysis.resume", json!({}));
     h.settle();
     let state = h.app.pipeline.state();

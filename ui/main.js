@@ -18,7 +18,6 @@ export const S = {
   follow: true, // the carousel follows the item being analyzed
   details: new Map(),
   registration: null, // {done,total} while files are being added, then {summary}
-  thumbVersion: 0,
 };
 
 export const project = () => S.boot && S.boot.projects.current;
@@ -62,7 +61,6 @@ export async function refresh() {
   try {
     S.all = await api.call('grid', {});
     S.view = filtered() ? await api.call('grid', { filter: S.filter, query: S.query }) : S.all;
-    S.thumbVersion = S.all.rows.filter((r) => r.thumb).length;
     const ids = new Set(S.all.rows.map((r) => r.id));
     for (const id of [...S.selected]) if (!ids.has(id)) S.selected.delete(id);
     for (const id of [...S.details.keys()]) S.details.delete(id);
@@ -181,7 +179,7 @@ const displayName = (row) => row.friendlyName || row.suggestedName || row.origin
 
 function thumbImg(row) {
   return row.thumb
-    ? h('img', { src: api.fileUrl(row.thumb, row.status + S.thumbVersion), alt: '', loading: 'lazy', draggable: false })
+    ? h('img', { src: api.fileUrl(row.thumb, row.thumbAt), alt: '', loading: 'lazy', draggable: false })
     : icon(row.kind === 'Video' ? 'film' : 'image', 40);
 }
 

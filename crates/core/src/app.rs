@@ -43,6 +43,9 @@ pub struct App {
     pub pipeline: Pipeline,
     emit: Emit,
     adds_running: AtomicUsize,
+    /// A thread is writing thumbnails for items that wait to be analyzed.
+    thumbs_running: AtomicBool,
+    closing: AtomicBool,
     pull_cancel: Arc<AtomicBool>,
     pulling: Mutex<Option<String>>,
     genie: Mutex<GenieStatus>,
@@ -359,6 +362,8 @@ impl App {
             pipeline,
             emit,
             adds_running: AtomicUsize::new(0),
+            thumbs_running: AtomicBool::new(false),
+            closing: AtomicBool::new(false),
             pull_cancel: Arc::new(AtomicBool::new(false)),
             pulling: Mutex::new(None),
             genie: Mutex::new(GenieStatus::default()),
@@ -426,7 +431,7 @@ impl App {
     // ---- projects ----
 
     /// Opens `project` (stopping whatever runs for the previous one), lists it and makes it current.
-    fn open_project(&self, project: &ProjectRef, existing_only: bool) -> Result<Arc<OpenProject>> {
+    fn open_project(self: &Arc<Self>, project: &ProjectRef, existing_only: bool) -> Result<Arc<OpenProject>> {
         if let Some(cur) = self.current() {
             if paths::same_path(&cur.project.path, &project.path) {
                 return Ok(cur);
@@ -441,6 +446,7 @@ impl App {
         self.pipeline.show_project(Some(&opened.project.path), Some(&opened.db), notice);
         self.note(&format!("Opened {}", opened.project.name));
         self.resume_work(&opened);
+        self.start_thumbnails(&opened);
         (self.emit)("projects", Value::Null);
         Ok(opened)
     }
@@ -458,7 +464,7 @@ impl App {
     }
 
     /// Opens the project that was open last time, if its folder is still there.
-    pub fn restore_current(&self) {
+    pub fn restore_current(self: &Arc<Self>) {
         if let Some(p) = self.registry.current() {
             if let Err(e) = self.open_project(&p, true) {
                 self.note(&format!("Couldn't reopen {}: {e}", p.name));
@@ -579,11 +585,68 @@ impl App {
         self.pipeline.start(self.env(open));
     }
 
+    /// Writes a thumbnail for every item of `open` that waits to be analyzed, in the order they
+    /// will be analyzed, on a background thread, so the window shows what is coming instead of
+    /// blank cards. Analysis writes the same thumbnails when it reaches an item; this only gets
+    /// there first. It ends when none is left to write, the project is closed, or the app closes.
+    fn start_thumbnails(self: &Arc<Self>, open: &Arc<OpenProject>) {
+        if self.thumbs_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (app, open) = (self.clone(), open.clone());
+        std::thread::spawn(move || {
+            let preparer = MediaPreparer { work_dir: norm(app.data_dir.join("work")), thumbs_dir: projects::thumbs_dir(&open.project.path), ffmpeg: app.ffmpeg(), grabber: None };
+            let max_frames = app.settings().max_frames_per_clip as usize;
+            let wanted = || !app.closing.load(Ordering::SeqCst) && app.current().is_some_and(|c| Arc::ptr_eq(&c, &open));
+            // Items that gave no thumbnail (unreadable, or a video without FFmpeg) are not tried again.
+            let mut skip: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            let mut last_emit = std::time::Instant::now();
+            let mut unseen = false;
+            while wanted() {
+                let waiting: Vec<_> = open.db.items().unwrap_or_default().into_iter().filter(|i| i.status == ItemStatus::Pending && !skip.contains(&i.id) && !std::path::Path::new(&preparer.thumb_path(i.id)).is_file()).collect();
+                if waiting.is_empty() {
+                    // Files still being added will need theirs too.
+                    if app.adds_running.load(Ordering::SeqCst) == 0 {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                    continue;
+                }
+                for item in waiting {
+                    if !wanted() {
+                        break;
+                    }
+                    match preparer.thumbnail(item.id, &item.current_path, item.kind, item.duration_ms, max_frames) {
+                        Ok(true) => unseen = true,
+                        _ => {
+                            skip.insert(item.id);
+                        }
+                    }
+                    // The window reloads its rows at most twice a second.
+                    if unseen && last_emit.elapsed() >= Duration::from_millis(500) {
+                        (app.emit)("data", Value::Null);
+                        last_emit = std::time::Instant::now();
+                        unseen = false;
+                    }
+                }
+            }
+            app.thumbs_running.store(false, Ordering::SeqCst);
+            if unseen {
+                (app.emit)("data", Value::Null);
+            }
+            // Another project was opened while this one's thumbnails were written: it is next.
+            if let Some(now_open) = app.current().filter(|c| !Arc::ptr_eq(c, &open) && !app.closing.load(Ordering::SeqCst)) {
+                app.start_thumbnails(&now_open);
+            }
+        });
+    }
+
     /// Registers `candidates` on a background thread, then starts analysis. Progress and the
     /// summary reach the window as `registration` events.
     fn add_media(self: &Arc<Self>, open: Arc<OpenProject>, candidates: Vec<String>, skipped: usize) {
         let app = self.clone();
         self.adds_running.fetch_add(1, Ordering::SeqCst);
+        self.start_thumbnails(&open);
         std::thread::spawn(move || {
             let ffmpeg = app.ffmpeg();
             let emit = app.emit.clone();
@@ -600,6 +663,8 @@ impl App {
                 app.pipeline.refresh_counts(&open.db);
                 if summary.added > 0 {
                     app.start_analysis(&open);
+                    // In case the thumbnail thread ended just before the last files were added.
+                    app.start_thumbnails(&open);
                 }
             }
             (app.emit)("registration", json!({"finished": true, "summary": summary}));
@@ -871,7 +936,10 @@ impl App {
             .map(|r| {
                 let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
                 let thumb = format!("{thumbs}/{}.jpg", r.id);
-                v["thumb"] = if std::path::Path::new(&thumb).is_file() { json!(thumb) } else { Value::Null };
+                // When the thumbnail was written, so the window reloads a picture only when it changed.
+                let written = std::fs::metadata(&thumb).ok().filter(|m| m.is_file()).map(|m| m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0));
+                v["thumbAt"] = json!(written);
+                v["thumb"] = if written.is_some() { json!(thumb) } else { Value::Null };
                 v["categoryName"] = json!(r.category_id.and_then(|id| categories.iter().find(|c| c.id == id)).map(|c| c.name.clone()));
                 v["failure"] = json!((r.status == ItemStatus::Failed).then(|| failure::describe(r.failure_reason.as_deref())));
                 v
@@ -1347,6 +1415,7 @@ impl App {
 
     /// Stops any run and waits for it, before the app closes.
     pub fn shutdown(&self) {
+        self.closing.store(true, Ordering::SeqCst);
         self.pull_cancel.store(true, Ordering::SeqCst);
         self.pipeline.stop_and_wait();
         self.genie_server.stop();
