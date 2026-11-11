@@ -11,4 +11,6 @@ pub mod media;
 pub mod moves;
 pub mod names;
 pub mod paths;
+pub mod pipeline;
+pub mod projects;
 pub mod sorting;
