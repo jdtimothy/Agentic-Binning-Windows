@@ -1061,6 +1061,9 @@ impl App {
                 }
                 let a: A = arg(args)?;
                 let open = self.open()?;
+                if self.pipeline.state().phase.is_moving() {
+                    return Err(Error::msg("Files are moving, so nothing was copied. Pick them again when the files have moved."));
+                }
                 let app = self.clone();
                 self.adds_running.fetch_add(1, Ordering::SeqCst);
                 std::thread::spawn(move || {
@@ -1201,7 +1204,18 @@ impl App {
                 let check = job.check_now()?;
                 Ok(json!({
                     "preview": preview,
-                    "unexpected": check.unexpected.iter().map(|p| json!({"path": p, "name": paths::file_name(p), "folder": paths::file_name(paths::parent(p)), "isMedia": media::kind_of(p).is_some()})).collect::<Vec<_>>(),
+                    "unexpected": check.unexpected.iter().map(|p| json!({
+                        "path": p,
+                        "name": paths::file_name(p),
+                        "folder": paths::file_name(paths::parent(p)),
+                        "isMedia": media::kind_of(p).is_some(),
+                        "modified": crate::files::last_modified(p),
+                        "sizeText": moves::format_bytes(crate::files::size(p)),
+                    })).collect::<Vec<_>>(),
+                    "missing": check.missing.iter().map(|p| json!({"name": paths::file_name(p), "folder": paths::file_name(paths::parent(p))})).collect::<Vec<_>>(),
+                    // Nothing to move, but the last run's folder check found something: a tap runs only the check.
+                    "checkOnly": preview.files == 0 && open.db.last_check_ok()? == Some(false),
+                    "projectName": open.project.name,
                     "copyBytesText": moves::format_bytes(preview.copy_bytes),
                     "freeBytesText": moves::format_bytes(preview.free_bytes),
                     "enoughSpace": preview.free_bytes >= preview.copy_bytes + moves::MIN_FREE_BYTES,
@@ -1253,7 +1267,8 @@ impl App {
                 if !added.is_empty() {
                     self.start_analysis(&open);
                 }
-                Ok(json!({"ok": true, "added": added.len()}))
+                let left: Vec<&String> = a.paths.iter().filter(|p| !added.contains(p)).collect();
+                Ok(json!({"ok": true, "added": added.len(), "notAdded": left}))
             }
             "settings.set" => {
                 let mut next: AppSettings = {

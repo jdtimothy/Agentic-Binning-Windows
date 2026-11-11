@@ -50,9 +50,9 @@ The app writes the full command of its last call to **Settings → Activity log*
 Use `scripts/make-test-media.sh` from the Android repository (it needs FFmpeg) or a dozen of your own files, copied somewhere disposable.
 
 1. **New project** → name it → **A folder** → **Create and analyze**.
-2. Watch the Analyze screen: the status line should go Loading the model → Preparing → Describing, and the description should type itself out. Tokens per second appear in the middle of the status line.
+2. Watch the Analyze screen: the status line should go Loading model → Reading image (or Encoding frames) → Describing, and the description should type itself out. Tokens per second appear in the middle of the status line.
 3. Expected from the Android test set: 7 added; `empty.mp4` and `still_truncated.jpg` end **Failed** ("Couldn't read this file"); the rest analyzed.
-4. When analysis ends, the status line shows **Categorizing**, then **Analysis done**. Project Media should show category chips.
+4. When analysis ends, the status line shows **Categorizing**, then **All caught up**. Project Media should show category chips.
 
 Things to note down: seconds per photo and per clip (each one loads the model again), and whether a video's actions have sensible times.
 
@@ -69,7 +69,7 @@ Things to note down: seconds per photo and per clip (each one loads the model ag
 
 ## 6. Bin Files
 
-1. In Project Media press **Bin Files**, read the sheet, press **Move N files**.
+1. In Project Media press **Bin Files**, read the sheet, press **Bin N files**.
 2. The files should now be in `Pictures\Agentic Binning\<project>\<Category>\<Friendly name>.<ext>`, and gone from where they were.
 3. Try **Pause** and **Stop** during a larger run, then Bin Files again: it carries on.
 4. Close the app during a run and start it again: the run should resume by itself.

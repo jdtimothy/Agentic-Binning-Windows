@@ -102,10 +102,10 @@ function renderChrome() {
   top.replaceChildren(
     h('button.pill', { title: 'Models and settings', onclick: () => sheets.settings() },
       icon('chip'),
-      h('span.two', h('b', b.simulated ? 'Simulated' : b.models.vision.displayName), h('span', b.simulated ? 'GenieX not in use' : b.settings.compute.toUpperCase()))),
-    h('button.pill.grow', { title: 'Projects', onclick: () => sheets.projects() },
+      h('span.two', h('b', b.simulated ? 'Simulated' : b.models.vision.displayName), h('span', b.simulated ? 'GenieX not in use' : b.pulling === b.models.vision.id ? 'Downloading' : b.genie.visionReady || b.genie.error ? b.settings.compute.toUpperCase() : 'Not downloaded'))),
+    h('button.pill.grow', { title: cur ? 'Add media or switch project' : 'Open projects', onclick: () => (cur || S.boot.projects.projects.length ? sheets.projects() : sheets.newProject()) },
       icon('folder'),
-      h('span.name', cur ? cur.name : 'No project open'),
+      h('span.name', cur ? cur.name : 'Create project'),
       cur && S.all ? h('span.count', S.all.total.toLocaleString()) : null),
     b.simulated ? h('span.simtag', { title: 'GenieX was not found, so analysis is simulated from each picture\'s colours.' }, 'Simulated') : null,
     h('button.ib', { 'aria-label': 'Settings', title: 'Settings', onclick: () => sheets.settings() }, icon('gear')),
@@ -113,7 +113,7 @@ function renderChrome() {
   const mtop = $('media-top');
   mtop.replaceChildren(
     h('button.ib', { 'aria-label': 'Back to Analyze', title: 'Back (Esc)', onclick: () => show('analyze') }, icon('back')),
-    h('div.ht', h('h1', cur ? cur.name : ''), h('span', S.all ? `Project media · ${plural(S.all.total, 'item')}` : 'Project media')),
+    h('div.ht', h('h1', cur ? cur.name : ''), h('span', S.all ? `${plural(S.all.total, 'item')} · ${plural(S.all.categories.length, 'category', 'categories')}` : '')),
     b.simulated ? h('span.simtag', 'Simulated') : null,
     h('button.ib', { 'aria-label': 'Settings', title: 'Settings', onclick: () => sheets.settings() }, icon('gear')),
   );
@@ -131,22 +131,31 @@ export function render() {
 // ---------------------------------------------------------------------------------------------
 
 function phaseLine(p) {
-  const fr = p.framesTotal ? ` · frame ${p.framesReady} of ${p.framesTotal}` : '';
+  const row = S.all && S.all.rows.find((r) => r.id === p.currentItemId);
   switch (p.phase) {
-    case 'LoadingModel': return p.downloadFraction !== null && p.downloadFraction !== undefined ? ['run', `Downloading the model · ${Math.round(p.downloadFraction * 100)}%`] : ['run', 'Loading the model'];
-    case 'Preparing': return ['run', 'Preparing' + fr];
+    case 'LoadingModel': return p.downloadFraction !== null && p.downloadFraction !== undefined ? ['run', `Downloading model · ${Math.round(p.downloadFraction * 100)}%`] : ['run', 'Loading model'];
+    case 'Preparing': return ['run', row && row.kind === 'Video' ? 'Encoding frames' : 'Reading image'];
     case 'Describing': return ['run', 'Describing'];
     case 'Paused': return ['warn', 'Paused'];
-    case 'Releasing': return ['run', 'Finishing'];
-    case 'Categorizing': return ['run', p.sortTotal ? `Categorizing · ${p.sortDone} of ${p.sortTotal}` : 'Categorizing'];
-    case 'Moving': return ['run', p.moveProgress ? `Moving files · ${p.moveProgress.done} of ${p.moveProgress.total}` : 'Checking the folders'];
-    case 'MovingPaused': return ['warn', 'Moving paused'];
+    case 'Releasing': return ['run', 'Finishing up'];
+    case 'Categorizing': return ['run', 'Categorizing'];
+    case 'Moving': return ['run', 'Binning files'];
+    case 'MovingPaused': return ['warn', 'Bin Files paused'];
     case 'Stopped': return p.error ? ['warn', p.error] : ['', 'Stopped'];
     default:
+      if (!project()) return ['', 'No project open'];
       if (p.sortNotice) return ['warn', p.sortNotice];
-      if (p.total && p.pending === 0) return ['ok', 'Analysis done'];
-      return ['', p.total ? 'Ready' : 'Add photos and videos to begin'];
+      if (!p.total) return ['', 'No media yet'];
+      return p.pending === 0 ? ['ok', 'All caught up'] : ['', 'Waiting to analyze'];
   }
+}
+
+/** The right of the status line: "3 of 10 analyzed · 1 failed", or the count of the job in hand. */
+function progressText(p) {
+  if (p.phase === 'Categorizing' && p.sortTotal) return `${p.sortDone} of ${p.sortTotal}`;
+  if ((p.phase === 'Moving' || p.phase === 'MovingPaused') && p.moveProgress) return `${p.moveProgress.done} of ${p.moveProgress.total}`;
+  if (!p.total) return '';
+  return `${p.analyzed} of ${p.total} analyzed${p.failed ? ` · ${p.failed} failed` : ''}`;
 }
 
 function cardSub(row) {
@@ -173,21 +182,21 @@ function renderAnalyze() {
   $('runline').replaceChildren(
     h('div.phase', h(`i.dot${tone ? '.' + tone : ''}`), h('span', { title: text }, text)),
     h('div.mid', speed),
-    h('div.right', p.total ? `${p.analyzed + p.failed} of ${p.total} analyzed` : ''),
+    h('div.right', progressText(p)),
   );
 
   const stage = $('stage');
   const rows = S.all ? S.all.rows : [];
   if (!project()) {
     stage.replaceChildren(h('div.empty', { style: 'grid-column:1/-1;grid-row:1/-1' },
-      h('h2', 'Sort your photos and videos'),
-      h('p', 'Make a project, add a folder, and the model on this computer names, describes and categorizes every shot. Nothing leaves the computer.'),
-      h('button.primary', { style: 'flex:none', onclick: () => sheets.newProject() }, icon('plus'), 'New project'),
-      h('button.link', { onclick: () => sheets.projects() }, 'Open an existing project')));
+      h('h2', 'No project open'),
+      h('p', 'Create a project, then add a folder or pick photos and videos from the project menu.'),
+      h('button.primary', { style: 'flex:none', onclick: () => sheets.newProject() }, icon('plus'), 'Create project'),
+      h('button.link', { onclick: () => sheets.projects() }, 'Open project')));
   } else if (!rows.length) {
     stage.replaceChildren(h('div.empty', { style: 'grid-column:1/-1;grid-row:1/-1' },
-      h('h2', `${project().name} is empty`),
-      h('p', S.registration && !S.registration.summary ? `Adding ${S.registration.done} of ${S.registration.total}…` : 'Add a folder or pick photos and videos. You can also drop them on this window.'),
+      h('h2', 'No media yet'),
+      h('p', S.registration && !S.registration.summary ? (S.registration.total ? `Adding ${S.registration.done} of ${S.registration.total}…` : 'Adding…') : 'Add a folder or pick photos and videos from the project menu. You can also drop them on this window.'),
       h('div', { style: 'display:flex;gap:8px' },
         h('button.primary', { style: 'flex:none', onclick: () => sheets.addFolder() }, icon('folder'), 'Add a folder'),
         h('button.secondary', { onclick: () => sheets.addFiles() }, icon('image'), 'Pick photos and videos'))));
@@ -287,7 +296,7 @@ async function renderOutput(box, row, p) {
     const part = p.partial || { description: '', descriptionDone: false, actions: [], tags: [] };
     const waiting = p.phase === 'Preparing' || p.phase === 'LoadingModel';
     box.replaceChildren(...(waiting && !part.description
-      ? [h('h3', 'Description'), h('p.desc', { style: 'color:var(--sub)' }, row.kind === 'Video' ? 'Reading the clip\'s frames…' : 'Reading the photo…')]
+      ? [h('h3', 'Description'), h('p.desc', { style: 'color:var(--sub)' }, row.kind === 'Video' ? `Reading ${p.framesTotal || 'the'} frames on the NPU…` : 'Reading the image on the NPU…')]
       : analysisBlocks(part.description, part.actions, part.tags, p.phase === 'Describing')));
     box.scrollTop = box.scrollHeight;
     return;
@@ -304,7 +313,7 @@ async function renderOutput(box, row, p) {
   const blocks = [];
   if (d.simulated) blocks.push(h('div.note', icon('info', 18), h('span.grow', h('b', 'Simulated analysis. '), 'GenieX was not used for this item. Install GenieX and the model, then use Retry or re-add it for a real analysis.')));
   if (row.status === 'Failed') blocks.push(h('div.note', icon('warn', 18), h('span.grow', h('b', 'Analysis failed. '), d.failure), h('button.link', { onclick: () => sheets.detail(row.id) }, 'Fix')));
-  if (row.status === 'Missing') blocks.push(h('div.note', icon('warn', 18), h('span.grow', h('b', 'File missing. '), 'It is no longer where the project last saw it.')));
+  if (row.status === 'Missing') blocks.push(h('div.note', icon('warn', 18), h('span.grow', 'The file is missing.')));
   if (d.analysis) blocks.push(...analysisBlocks(d.analysis.description, d.analysis.actions, d.tags, false));
   else if (row.status === 'Pending' || row.status === 'Analyzing') blocks.push(h('h3', 'Description'), h('p.desc', { style: 'color:var(--sub)' }, 'Waiting to be analyzed.'));
   box.replaceChildren(...blocks);
@@ -347,7 +356,7 @@ function renderMedia() {
   // The search field keeps its node so typing never loses focus or the caret.
   let search = $('search-input');
   if (!search) {
-    search = h('input#search-input', { type: 'search', placeholder: 'Search "sea turtles on the sand"', 'aria-label': 'Search this project', spellcheck: false, autocomplete: 'off' });
+    search = h('input#search-input', { type: 'search', placeholder: 'Search names, tags, descriptions', 'aria-label': 'Search this project', spellcheck: false, autocomplete: 'off' });
     search.addEventListener('input', () => {
       S.query = search.value;
       clearTimeout(searchTimer);
@@ -365,21 +374,23 @@ function renderMedia() {
     onclick: () => { S.filter.chip = S.filter.chip === c.chip && c.chip !== 'all' ? 'all' : c.chip; refresh(); },
   }, c.locked ? icon('lock', 13) : null, c.label, h('span.n', c.count.toLocaleString()));
   const kind = (label, value) => h('button', { 'aria-pressed': String(S.filter.kind === value), onclick: () => { S.filter.kind = value; refresh(); } }, label);
-  const extra = (S.filter.shotType ? 1 : 0) + (S.filter.takenFrom || S.filter.takenTo ? 1 : 0);
   const chipLabel = v.chips.find((c) => c.chip === S.filter.chip);
   const resultText = v.searching
     ? `${plural(v.rows.length, 'result')} for "${S.query.trim()}"`
-    : `${chipLabel && S.filter.chip !== 'all' ? chipLabel.label : 'All categories'} · ${plural(v.rows.length, 'item')}`;
+    : `${chipLabel && S.filter.chip !== 'all' ? chipLabel.label + ' · ' : ''}${plural(v.rows.length, 'item')}`;
 
   const head = h('div', { style: 'display:flex;flex-direction:column;gap:10px;flex:none' },
     h('div.cathead',
-      h('h3', `Categories · ${cats}`),
+      h('h3', 'Categories'),
       h('button.mini', { disabled: busy, title: busy ? 'Re-sort is available when analysis is stopped or done' : 'Sort everything again', onclick: () => sheets.resort() }, icon('shuffle', 16), 'Re-sort'),
       h('button.mini', { disabled: !cats, onclick: () => sheets.categoryEdit() }, icon('edit', 16), 'Edit')),
     h('div.chips', v.chips.map(chipEl)),
     h('div.filters',
       h('div.seg', { role: 'group', 'aria-label': 'Kind' }, kind('All', null), kind('Photos', 'Photo'), kind('Videos', 'Video')),
-      h(`button.fchip${extra ? '.set' : ''}`, { onclick: () => sheets.filters() }, extra ? `Filters · ${extra}` : 'Filters', icon('down', 14)),
+      h('button.fchip', { onclick: () => sheets.filters() }, 'Filters', icon('down', 14)),
+      S.filter.shotType ? h('button.fchip.set', { title: 'Clear this filter', onclick: () => { S.filter.shotType = null; refresh(); } }, `${S.filter.shotType[0].toUpperCase()}${S.filter.shotType.slice(1)} shots`, icon('x', 13)) : null,
+      S.filter.takenFrom || S.filter.takenTo ? h('button.fchip.set', { title: 'Clear this filter', onclick: () => { S.filter.takenFrom = null; S.filter.takenTo = null; refresh(); } },
+        [S.filter.takenFrom, S.filter.takenTo].map((d) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '…')).join(' – '), icon('x', 13)) : null,
       h('span.result', resultText),
       S.selecting ? h('button.mini', { onclick: () => { v.rows.forEach((r) => S.selected.add(r.id)); render(); } }, 'Select all') : null,
       h('button.mini', { onclick: () => { S.selecting = !S.selecting; S.selected.clear(); render(); } }, icon('checkbox', 16), S.selecting ? 'Done' : 'Select')));
@@ -426,23 +437,26 @@ function renderDock(v) {
   if (moving()) {
     const m = p.moveProgress;
     const paused = p.phase === 'MovingPaused';
-    const title = m && m.kind === 'Save' ? 'Saving' : 'Bin Files';
-    const steps = [];
-    for (const f of (m && m.recent) || []) steps.push(h('li.done', h('span.ico', icon('check', 12)), h('span', h('b', f.name), h('small', f.folder)), h('span.ph2', 'Checked')));
-    if (m && m.current) steps.push(h('li.cur', h('span.ico'), h('span', h('b', m.current), h('small', `${m.from} → ${m.to}`)), h('span.ph2', { Moving: 'Moving', Copying: 'Copying', Checking: 'Checking', Placing: 'Placing', DeletingOriginal: 'Removing the original' }[m.phase] || '')));
-    if (paused && m && m.next) steps.push(h('li', h('span.ico'), h('span', h('b', m.next), h('small', 'Next')), h('span.ph2', 'Waiting')));
-    parts.push(h('div.job.glass.strong',
-      h('div.top', h('b', paused ? `${title} paused` : title), h('span', m ? `${m.done} of ${plural(m.total, 'file')}` : 'Checking the folders')),
+    const save = m && m.kind === 'Save';
+    const title = paused ? 'Paused' : save ? 'Saving' : 'Binning files';
+    const rows = [];
+    for (const f of (m && m.recent) || []) rows.push(h('li.done', h('span.ico', icon('check', 12)), h('span', h('b', f.name), h('small', f.folder)), h('span.ph2', 'Done')));
+    parts.push(h('div.job.glass',
+      h('div.top', h('b', title), h('span', m ? `${paused ? m.done : Math.min(m.done + 1, m.total)} of ${m.total}` : '')),
       h('div.bar', h('i', { style: `width:${m && m.total ? (100 * m.done) / m.total : 0}%` })),
-      steps.length ? h('ul.steps', steps) : null,
+      paused && m && m.next ? h('div.now', h('b', `Next: ${m.next}`), h('small', 'The file in progress finished. Nothing is half moved.'))
+        : m && m.current ? h('div.now', h('b', m.current), h('small', `${m.from} → ${m.to}`))
+        : h('div.now', h('small', m ? '' : 'Checking the folders')),
+      rows.length ? h('ul.steps', rows) : null,
       h('div.row',
+        h('span.wait', icon('info', 14), paused ? 'Other edits wait until it ends.' : 'Other edits wait. You can leave this screen.'),
         h('button.mini', { onclick: () => api.call(paused ? 'analysis.resume' : 'analysis.pause').catch(fail) }, icon(paused ? 'play' : 'pause', 16), paused ? 'Resume' : 'Pause'),
-        h('button.mini', { title: 'The file in progress finishes first', onclick: () => api.call('analysis.stop').catch(fail) }, icon('stop', 16), 'Stop'))));
+        h('button.mini', { onclick: () => api.call('analysis.stop').catch(fail) }, icon('stop', 16), 'Stop'))));
   }
   if (S.selecting) {
     const n = S.selected.size;
     parts.push(h('div.dock.glass', h('div.dbtns',
-      h('button.primary', { 'aria-disabled': String(!n), disabled: !n, onclick: () => sheets.moveTo([...S.selected]) }, icon('move'), n ? `Move ${plural(n, 'item')} to a category` : 'Move to a category'),
+      h('button.primary', { 'aria-disabled': String(!n), disabled: !n, onclick: () => sheets.moveTo([...S.selected]) }, icon('move'), n ? `Move to category · ${n}` : 'Move to category'),
       h('button.secondary.danger', { disabled: !n, onclick: () => sheets.removeItems([...S.selected]) }, icon('trash'), 'Remove from project'))));
   } else {
     const st = v.status;
@@ -549,11 +563,11 @@ async function start() {
     S.registration = r.finished ? { summary: r.summary } : r;
     sheets.onRegistration(S.registration);
     if (r.finished) {
-      toast(r.summary.text, r.summary.held.length ? { label: 'Copy them in', run: () => sheets.copyHeld(r.summary.held) } : null);
+      if (r.summary.held.length) sheets.heldNotice(r.summary); else toast(r.summary.text);
       refreshSoon(0);
     } else if (S.screen === 'analyze' && S.all && !S.all.rows.length) renderAnalyze();
   });
-  api.on('copy', (r) => { if (r.finished) { toast(r.result.text); refreshSoon(0); } });
+  api.on('copy', (r) => { sheets.onCopy(r); if (r.finished) refreshSoon(0); });
   api.on('pull', (r) => sheets.onPull(r));
   api.on('drop', onDrop);
   api.on('dragging', (on) => $('drop').classList.toggle('on', !!on));
