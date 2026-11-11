@@ -190,7 +190,7 @@ impl ProjectRegistry {
         let mut data = self.read_for_write()?;
         let dir = format!("{}/{folder}", self.projects_root.trim_end_matches('/'));
         if Path::new(&dir).exists() {
-            return Err(Error::msg(format!("A folder named {folder} already exists")));
+            return Err(Error::msg("A project folder with that name already exists"));
         }
         std::fs::create_dir_all(thumbs_dir(&dir))?;
         hide(&binning_dir(&dir));

@@ -376,7 +376,7 @@ function renderMedia() {
   const kind = (label, value) => h('button', { 'aria-pressed': String(S.filter.kind === value), onclick: () => { S.filter.kind = value; refresh(); } }, label);
   const chipLabel = v.chips.find((c) => c.chip === S.filter.chip);
   const resultText = v.searching
-    ? `${plural(v.rows.length, 'result')} for "${S.query.trim()}"`
+    ? `${plural(v.rows.length, 'result')} for “${S.query.trim()}”`
     : `${chipLabel && S.filter.chip !== 'all' ? chipLabel.label + ' · ' : ''}${plural(v.rows.length, 'item')}`;
 
   const head = h('div', { style: 'display:flex;flex-direction:column;gap:10px;flex:none' },

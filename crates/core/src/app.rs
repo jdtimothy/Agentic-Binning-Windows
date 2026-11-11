@@ -279,7 +279,7 @@ impl Edit {
         match self {
             Edit::Ok => json!({"ok": true}),
             Edit::Created(id) => json!({"ok": true, "id": id}),
-            Edit::Clash(existing) => json!({"ok": false, "error": format!("There is already a category named {existing}")}),
+            Edit::Clash(existing) => json!({"ok": false, "error": format!("A category named “{existing}” already exists.")}),
             Edit::InvalidName => json!({"ok": false, "error": "That name has no characters a folder can use"}),
             Edit::NotFound => json!({"ok": false, "error": "It isn't in the project any more"}),
             Edit::Busy(reason) => json!({"ok": false, "error": reason}),
