@@ -1041,3 +1041,7 @@ fn run_move(inner: &Inner, env: &RunEnv, job: MoveJob, control: &MoveControl) {
         s.move_ended += 1;
     });
 }
+
+#[cfg(test)]
+#[path = "pipeline_android_cases.rs"]
+mod android_cases;

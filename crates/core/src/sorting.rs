@@ -232,6 +232,16 @@ pub mod planner {
         estimate_tokens(&prompt::item_line(item)) + 1 + REPLY_TOKENS_PER_ITEM
     }
 
+    /// The estimated tokens of an assignment call for `items` beside a category list of `category_tokens`.
+    pub fn chunk_tokens(items: &[SortItem], category_tokens: usize) -> usize {
+        fixed_assign_tokens(category_tokens) + items.iter().map(item_tokens).sum::<usize>()
+    }
+
+    /// The estimated tokens of a proposal call for `items`.
+    pub fn propose_tokens(items: &[SortItem]) -> usize {
+        fixed_propose_tokens() + items.iter().map(|i| estimate_tokens(&prompt::propose_line(i)) + 1).sum::<usize>()
+    }
+
     fn limit_of(budget: &ChunkBudget) -> usize {
         (FIT_FRACTION * budget.context_tokens as f64) as usize
     }
@@ -386,7 +396,14 @@ fn long_of(v: Option<&Value>) -> Option<i64> {
     if let Some(i) = v.as_i64() {
         return Some(i);
     }
-    let d = v.as_f64()?;
+    // The model sometimes writes an id as a string ("3"), which the Android parser also reads.
+    let d = match v.as_str() {
+        Some(s) => match s.trim().parse::<i64>() {
+            Ok(i) => return Some(i),
+            Err(_) => s.trim().parse::<f64>().ok()?,
+        },
+        None => v.as_f64()?,
+    };
     if d.fract() == 0.0 && d.abs() < 9e15 {
         Some(d as i64)
     } else {
@@ -853,6 +870,10 @@ pub mod validator {
         Validation::Ok { new_categories: new_used, assignments, warnings, left_out: item_problems }
     }
 }
+
+#[cfg(test)]
+#[path = "sorting_android_cases.rs"]
+mod android_cases;
 
 #[cfg(test)]
 mod tests {

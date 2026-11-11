@@ -85,6 +85,10 @@ fn volume_of(path: &str) -> Option<String> {
 
 /// Whether a rename from `a` to `b` stays on one storage volume; `b` may not exist yet.
 pub fn same_volume(a: &str, b: &str) -> bool {
+    #[cfg(test)]
+    if faults::other_volume(a) != faults::other_volume(b) {
+        return false;
+    }
     match (volume_of(a), volume_of(b)) {
         (Some(x), Some(y)) => x == y,
         _ => false,
@@ -95,6 +99,10 @@ pub fn same_volume(a: &str, b: &str) -> bool {
 /// exists. A hard link is tried first because it can never replace a file; file systems without
 /// hard links (exFAT, FAT32, some network shares) fall back to a checked rename.
 pub fn rename_no_replace(from: &str, to: &str) -> io::Result<bool> {
+    #[cfg(test)]
+    if let Some(r) = faults::on_rename() {
+        return r;
+    }
     // A change of letter case only: the "target" is the file itself.
     if paths::key(from) == paths::key(to) && paths::parent(from) == paths::parent(to) {
         fs::rename(from, to)?;
@@ -134,6 +142,11 @@ fn hex(bytes: &[u8]) -> String {
 pub fn copy_hashing(from: &str, to: &str) -> io::Result<String> {
     let mut input = File::open(from)?;
     let mut output = File::options().write(true).create_new(true).open(to)?;
+    #[cfg(test)]
+    if faults::take(|f| f.no_space_during_copy) {
+        output.write_all(b"half")?;
+        return Err(io::Error::from(io::ErrorKind::StorageFull));
+    }
     let mut digest = Sha256::new();
     let mut buf = vec![0u8; BUFFER];
     loop {
@@ -143,6 +156,10 @@ pub fn copy_hashing(from: &str, to: &str) -> io::Result<String> {
         }
         digest.update(&buf[..n]);
         output.write_all(&buf[..n])?;
+    }
+    #[cfg(test)]
+    if faults::corrupt_this_copy() {
+        output.write_all(b"!")?;
     }
     output.flush()?;
     output.sync_all()?;
@@ -179,6 +196,10 @@ pub fn mkdirs(dir: &str) -> bool {
 
 /// Free bytes on the volume holding `dir` (or its nearest existing parent).
 pub fn usable_space(dir: &str) -> i64 {
+    #[cfg(test)]
+    if let Some(free) = faults::get(|f| f.free) {
+        return free;
+    }
     fs4::available_space(existing(dir)).map(|b| b.min(i64::MAX as u64) as i64).unwrap_or(i64::MAX)
 }
 
@@ -206,6 +227,77 @@ pub fn remove_empty_dir(dir: &str) -> bool {
     match fs::read_dir(dir) {
         Ok(mut it) => it.next().is_none() && fs::remove_dir(dir).is_ok(),
         Err(_) => false,
+    }
+}
+
+/// Faults a test can switch on for its own thread, to reach the branches a healthy disk never
+/// takes: another volume, a full disk, a copy that reads back wrong, a rename that fails.
+#[cfg(test)]
+pub mod faults {
+    use std::cell::RefCell;
+    use std::io;
+
+    #[derive(Default)]
+    pub struct Faults {
+        /// Paths starting with this count as another volume.
+        pub other_volume: Option<String>,
+        /// What `usable_space` reports.
+        pub free: Option<i64>,
+        /// This many copies read back with one byte too many.
+        pub corrupt_copies: usize,
+        /// Copies made so far.
+        pub copies: usize,
+        /// The next copy runs out of space after writing part of the file.
+        pub no_space_during_copy: bool,
+        /// Renames report success and move nothing.
+        pub rename_lies: bool,
+        /// Renames are refused and touch nothing.
+        pub rename_fails: bool,
+    }
+
+    thread_local! {
+        static FAULTS: RefCell<Faults> = RefCell::new(Faults::default());
+    }
+
+    pub fn set(change: impl FnOnce(&mut Faults)) {
+        FAULTS.with(|f| change(&mut f.borrow_mut()));
+    }
+
+    pub fn get<T>(read: impl FnOnce(&Faults) -> T) -> T {
+        FAULTS.with(|f| read(&f.borrow()))
+    }
+
+    pub(super) fn take(read: impl FnOnce(&Faults) -> bool) -> bool {
+        get(read)
+    }
+
+    pub(super) fn other_volume(path: &str) -> bool {
+        get(|f| f.other_volume.as_deref().is_some_and(|v| path.starts_with(v)))
+    }
+
+    pub(super) fn corrupt_this_copy() -> bool {
+        FAULTS.with(|f| {
+            let mut f = f.borrow_mut();
+            f.copies += 1;
+            if f.corrupt_copies > 0 {
+                f.corrupt_copies -= 1;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    pub(super) fn on_rename() -> Option<io::Result<bool>> {
+        get(|f| {
+            if f.rename_fails {
+                Some(Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+            } else if f.rename_lies {
+                Some(Ok(true))
+            } else {
+                None
+            }
+        })
     }
 }
 

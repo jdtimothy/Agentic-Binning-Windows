@@ -445,6 +445,10 @@ pub fn partial(text: &str) -> PartialAnalysis {
 }
 
 #[cfg(test)]
+#[path = "analysis_android_cases.rs"]
+mod android_cases;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

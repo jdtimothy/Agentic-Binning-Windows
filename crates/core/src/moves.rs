@@ -1105,6 +1105,10 @@ pub fn format_bytes(bytes: i64) -> String {
 }
 
 #[cfg(test)]
+#[path = "moves_android_cases.rs"]
+mod android_cases;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis::ItemKind;

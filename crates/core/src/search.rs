@@ -46,4 +46,65 @@ mod tests {
         assert_eq!(fts_query("sea turtle ").as_deref(), Some("\"sea\" \"turtle\""));
         assert_eq!(fts_query("a\"b AND -x").as_deref(), Some("\"a\"\"b\" \"AND\" \"-x\"*"));
     }
+
+    // The Android app's `FtsQueryTest`.
+
+    fn q(input: &str) -> String {
+        fts_query(input).unwrap()
+    }
+
+    #[test]
+    fn blank_or_punctuation_only_is_none() {
+        for input in ["", "   ", " - * ( \" "] {
+            assert_eq!(fts_query(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn last_word_is_a_prefix_earlier_words_are_exact() {
+        assert_eq!(q("turt"), r#""turt"*"#);
+        assert_eq!(q("sea turt"), r#""sea" "turt"*"#);
+        // A trailing space ends the prefix.
+        assert_eq!(q("sea turtle "), r#""sea" "turtle""#);
+    }
+
+    #[test]
+    fn fts_syntax_is_quoted_as_text() {
+        assert_eq!(q("AND"), r#""AND"*"#);
+        assert_eq!(q("sea OR"), r#""sea" "OR"*"#);
+        assert_eq!(q("-x"), r#""-x"*"#);
+        assert_eq!(q("a:b"), r#""a:b"*"#);
+        assert_eq!(q("(x"), r#""(x"*"#);
+        assert_eq!(q("NEAR("), r#""NEAR("*"#);
+    }
+
+    #[test]
+    fn double_quotes_are_escaped() {
+        assert_eq!(q("say \"hi\""), r#""say" """hi"""*"#);
+        assert_eq!(q("turtle\""), r#""turtle"""*"#);
+    }
+
+    #[test]
+    fn punctuation_only_words_are_dropped_and_marks_stay_inside_words() {
+        assert_eq!(q("sea - turtle"), r#""sea" "turtle"*"#);
+        assert_eq!(q("mama's"), r#""mama's"*"#);
+        assert_eq!(q("café hoʻokipa"), r#""café" "hoʻokipa"*"#);
+    }
+
+    #[test]
+    fn word_count_is_capped() {
+        let input = (1..=30).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
+        assert_eq!(q(&input).split(' ').count(), super::MAX_WORDS);
+    }
+
+    /// Every query the builder makes must be one SQLite accepts.
+    #[test]
+    fn built_queries_never_fail_in_sqlite() {
+        let (_d, db) = crate::db::tests::temp_db();
+        for input in ["AND", "sea OR", "-x", "a:b", "(x", "NEAR(", "say \"hi\"", "turtle\"", "* ^ :", "café hoʻokipa", "a NOT b", "{x}", "x^2", "col: y"] {
+            if let Some(query) = fts_query(input) {
+                db.search(&query).unwrap_or_else(|e| panic!("{input:?} became {query:?}: {e}"));
+            }
+        }
+    }
 }
