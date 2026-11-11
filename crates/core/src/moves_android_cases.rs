@@ -1624,3 +1624,69 @@ fn merged_category_moves_its_files_into_the_folder_that_stays() {
     assert_eq!(r.content(&format!("{}/Beach/A.jpg", r.root)).as_deref(), Some("file A"));
     assert!(!files::exists(&format!("{}/Turtle Beach", r.root)));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Windows only (not from the Android app): a file another program holds
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(windows)]
+mod on_windows {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    /// A file open in a player or an editor is skipped and reported, never half-moved; the rest
+    /// of the run carries on, and the next Bin Files moves it once it is free.
+    #[test]
+    fn a_held_file_is_skipped_reported_and_moved_by_the_next_run() {
+        let r = trip();
+        let (a, b) = (format!("{}/a.mp4", r.cam), format!("{}/b.jpg", r.cam));
+        r.put(&a, "playing");
+        r.put(&b, "B");
+        let (held_item, free_item) = (r.sorted(&a, 1, "Surf Clip"), r.sorted(&b, 1, "Morning"));
+        let held = fs::OpenOptions::new().read(true).share_mode(1).open(&a).unwrap();
+        let job = r.job(&nobody);
+        assert_eq!(job.bin_files(&go(), &|_| {}).unwrap(), MoveOutcome::Done);
+        assert_eq!(r.content(&a).as_deref(), Some("playing"));
+        assert!(!files::exists(&format!("{}/Beach/Surf Clip.mp4", r.root)));
+        assert_eq!((r.status(held_item), r.status(free_item)), (ItemStatus::Sorted, ItemStatus::Binned));
+        let report = job.unread_report().unwrap().unwrap();
+        assert_eq!(report.moved, 1);
+        assert_eq!(report.skipped, vec![SkippedFile { item_id: held_item, name: "Surf Clip.mp4".into(), reason: step_errors::IO.into() }]);
+        assert_eq!(report.check_ok, Some(true));
+        drop(held);
+        assert_eq!(job.bin_files(&go(), &|_| {}).unwrap(), MoveOutcome::Done);
+        assert_eq!(r.content(&format!("{}/Beach/Surf Clip.mp4", r.root)).as_deref(), Some("playing"));
+        assert!(!files::exists(&a));
+    }
+
+    /// Names that differ only in case are one name on Windows: the second file gets a number.
+    #[test]
+    fn names_that_differ_only_in_case_never_collide() {
+        let r = trip();
+        let (a, b) = (format!("{}/a.jpg", r.cam), format!("{}/b.jpg", r.cam));
+        r.put(&a, "A");
+        r.put(&b, "B");
+        r.sorted(&a, 1, "Sunset");
+        r.sorted(&b, 1, "SUNSET");
+        assert_eq!(r.job(&nobody).bin_files(&go(), &|_| {}).unwrap(), MoveOutcome::Done);
+        assert_eq!(files::list_files(&format!("{}/Beach", r.root)), vec![format!("{}/Beach/SUNSET 2.jpg", r.root), format!("{}/Beach/Sunset.jpg", r.root)]);
+        assert_eq!(r.content(&format!("{}/Beach/Sunset.jpg", r.root)).as_deref(), Some("A"));
+        assert_eq!(r.content(&format!("{}/Beach/SUNSET 2.jpg", r.root)).as_deref(), Some("B"));
+    }
+
+    /// A project deep enough that its files pass 260 characters still bins and checks clean.
+    #[test]
+    fn a_project_with_long_paths_bins_and_checks_clean() {
+        let r = trip();
+        let long = "A category name of forty characters long";
+        let id = r.category(long);
+        let a = format!("{}/a.jpg", r.cam);
+        r.put(&a, "A");
+        let name = "Sixty characters of friendly name to make this path long ok";
+        r.sorted(&a, id, name);
+        let deep = BinFilesJob::new(&r.db, &r.root, &nobody);
+        assert_eq!(deep.bin_files(&go(), &|_| {}).unwrap(), MoveOutcome::Done);
+        assert_eq!(r.content(&format!("{}/{long}/{name}.jpg", r.root)).as_deref(), Some("A"));
+        assert_eq!(deep.unread_report().unwrap().unwrap().check_ok, Some(true));
+    }
+}

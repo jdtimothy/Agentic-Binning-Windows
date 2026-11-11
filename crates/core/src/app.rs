@@ -1347,6 +1347,10 @@ fn analysis_is_simulated(db: &ProjectDb, id: i64) -> bool {
 }
 
 #[cfg(test)]
+#[path = "app_android_cases.rs"]
+mod android_cases;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

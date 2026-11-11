@@ -96,8 +96,11 @@ pub fn same_volume(a: &str, b: &str) -> bool {
 }
 
 /// Moves `from` to `to` (folder and name) in one step; `Ok(false)`, touching nothing, if `to`
-/// exists. A hard link is tried first because it can never replace a file; file systems without
-/// hard links (exFAT, FAT32, some network shares) fall back to a checked rename.
+/// exists. An error leaves the file where it was.
+///
+/// On Windows this is one `MoveFileExW` call without the replace flag, which refuses an existing
+/// target itself. Elsewhere a hard link is tried first because it can never replace a file; file
+/// systems without hard links fall back to a checked rename.
 pub fn rename_no_replace(from: &str, to: &str) -> io::Result<bool> {
     #[cfg(test)]
     if let Some(r) = faults::on_rename() {
@@ -111,11 +114,57 @@ pub fn rename_no_replace(from: &str, to: &str) -> io::Result<bool> {
     if Path::new(to).exists() {
         return Ok(false);
     }
+    move_no_replace(from, to)
+}
+
+/// `path` as the Windows API takes it: backslashes, and the `\\?\` form once it is long, which
+/// lifts the 260 character limit. Stored paths are absolute and hold no `.` or `..` parts, as that
+/// form requires.
+#[cfg(windows)]
+fn api_path(path: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let back = path.replace('/', "\\");
+    let long = if back.len() < 240 || back.starts_with("\\\\?\\") {
+        back
+    } else if let Some(share) = back.strip_prefix("\\\\") {
+        format!("\\\\?\\UNC\\{share}")
+    } else if back.as_bytes().get(1) == Some(&b':') {
+        format!("\\\\?\\{back}")
+    } else {
+        back
+    };
+    std::ffi::OsStr::new(&long).encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn move_no_replace(from: &str, to: &str) -> io::Result<bool> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    const ERROR_FILE_EXISTS: i32 = 80;
+    const ERROR_ALREADY_EXISTS: i32 = 183;
+    let (from, to) = (api_path(from), api_path(to));
+    // No flags: never replace a file, and never copy across volumes (that fails with error 17,
+    // which the engine answers with its own checked copy).
+    // SAFETY: both pointers are to NUL-terminated UTF-16 buffers that outlive the call.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } != 0 {
+        return Ok(true);
+    }
+    let e = io::Error::last_os_error();
+    match e.raw_os_error() {
+        Some(ERROR_FILE_EXISTS) | Some(ERROR_ALREADY_EXISTS) => Ok(false),
+        _ => Err(e),
+    }
+}
+
+#[cfg(not(windows))]
+fn move_no_replace(from: &str, to: &str) -> io::Result<bool> {
     match fs::hard_link(from, to) {
         Ok(()) => match fs::remove_file(from) {
             Ok(()) => Ok(true),
             Err(e) => {
-                // The source is held open by another program: undo, so there is still one file.
+                // The source can't be removed: undo, so there is still one file.
                 let _ = fs::remove_file(to);
                 Err(e)
             }
@@ -335,5 +384,132 @@ mod tests {
         assert_eq!(list_files(&root).len(), 2);
         assert!(!remove_empty_dir(&root));
         assert!(usable_space(&root) > 0);
+    }
+}
+
+/// What only Windows does. These run in the Build workflow on GitHub's Windows ARM64 machine and
+/// on the owner's PC; a Linux session can't run them.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    /// Other programs may read the file but not delete or rename it: how an editor or a player holds a file.
+    const FILE_SHARE_READ: u32 = 1;
+
+    fn root() -> (tempfile::TempDir, String) {
+        let d = tempfile::tempdir().unwrap();
+        let root = paths::norm(d.path());
+        (d, root)
+    }
+
+    #[test]
+    fn rename_keeps_size_time_and_content() {
+        let (_d, root) = root();
+        let (a, b) = (format!("{root}/camera/a.jpg"), format!("{root}/proj/Beach/Morning.jpg"));
+        mkdirs(&format!("{root}/camera"));
+        mkdirs(&format!("{root}/proj/Beach"));
+        fs::write(&a, b"the picture").unwrap();
+        set_last_modified(&a, 1_600_000_000_000);
+        let hash = sha256(&a).unwrap();
+        assert!(rename_no_replace(&a, &b).unwrap());
+        assert!(!exists(&a));
+        assert_eq!((size(&b), last_modified(&b), sha256(&b).unwrap()), (11, 1_600_000_000_000, hash));
+    }
+
+    #[test]
+    fn rename_never_replaces_whatever_the_case_of_the_name() {
+        let (_d, root) = root();
+        let (a, b) = (format!("{root}/a.jpg"), format!("{root}/Sunset.jpg"));
+        fs::write(&a, b"new").unwrap();
+        fs::write(&b, b"kept").unwrap();
+        for target in [b.clone(), format!("{root}/SUNSET.JPG")] {
+            assert!(!rename_no_replace(&a, &target).unwrap(), "{target}");
+            assert_eq!((fs::read(&a).unwrap(), fs::read(&b).unwrap()), (b"new".to_vec(), b"kept".to_vec()));
+        }
+        // NTFS keeps the name's case: the listing still shows the first spelling.
+        assert!(list_files(&root).contains(&b));
+    }
+
+    #[test]
+    fn a_change_of_case_only_renames_the_file_itself() {
+        let (_d, root) = root();
+        let (a, b) = (format!("{root}/sunset.JPG"), format!("{root}/Sunset.jpg"));
+        fs::write(&a, b"x").unwrap();
+        assert!(rename_no_replace(&a, &b).unwrap());
+        assert_eq!(list_files(&root), vec![b]);
+    }
+
+    #[test]
+    fn a_file_another_program_holds_is_not_moved_and_stays_whole() {
+        let (_d, root) = root();
+        let (a, b) = (format!("{root}/a.mp4"), format!("{root}/Clips/a.mp4"));
+        mkdirs(&format!("{root}/Clips"));
+        fs::write(&a, b"playing").unwrap();
+        let held = fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&a).unwrap();
+        assert!(rename_no_replace(&a, &b).is_err());
+        assert!(exists(&a) && !exists(&b), "one file, where it was");
+        // It can still be copied: that is how a file another project holds is binned.
+        let hash = copy_hashing(&a, &format!("{root}/copy.tmp")).unwrap();
+        assert_eq!(sha256(&format!("{root}/copy.tmp")).unwrap(), hash);
+        assert!(!delete(&a), "and a held original is never deleted");
+        drop(held);
+        assert!(rename_no_replace(&a, &b).unwrap());
+        assert_eq!(fs::read(&b).unwrap(), b"playing");
+    }
+
+    #[test]
+    fn paths_longer_than_260_characters_work() {
+        let (_d, root) = root();
+        let deep = format!("{root}/{}", ["A folder with a long name to make the path long"; 6].join("/"));
+        assert!(deep.len() > 300);
+        assert!(mkdirs(&deep));
+        let (a, b, c) = (format!("{root}/a.jpg"), format!("{deep}/Sea Turtles Resting On The Sand.jpg"), format!("{deep}/Copy.jpg"));
+        fs::write(&a, b"deep").unwrap();
+        assert!(rename_no_replace(&a, &b).unwrap(), "from a short path to a long one");
+        assert!(exists(&b) && is_file(&b));
+        assert_eq!(size(&b), 4);
+        let hash = copy_hashing(&b, &c).unwrap();
+        assert_eq!(sha256(&c).unwrap(), hash);
+        assert!(!rename_no_replace(&c, &b).unwrap(), "a long path is not replaced either");
+        let d = format!("{deep}/Moved.jpg");
+        assert!(rename_no_replace(&c, &d).unwrap(), "between two long paths");
+        assert_eq!(list_files(&deep), vec![d.clone(), b.clone()]);
+        assert!(same_volume(&a, &b));
+        assert!(delete(&b) && delete(&d));
+        assert!(remove_empty_dir(&deep));
+    }
+
+    #[test]
+    fn a_copy_reads_back_the_same_and_can_carry_the_time() {
+        let (_d, root) = root();
+        let (a, b) = (format!("{root}/a.bin"), format!("{root}/b.bin"));
+        fs::write(&a, vec![7u8; 3 * BUFFER + 11]).unwrap();
+        let hash = copy_hashing(&a, &b).unwrap();
+        assert_eq!((sha256(&b).unwrap(), size(&b)), (hash, (3 * BUFFER + 11) as i64));
+        set_last_modified(&b, 1_500_000_000_000);
+        assert_eq!(last_modified(&b), 1_500_000_000_000);
+        assert!(copy_hashing(&a, &b).is_err(), "a copy never replaces a file");
+    }
+
+    #[test]
+    fn names_windows_reserves_or_trims_are_made_safe() {
+        let (_d, root) = root();
+        for (typed, folder) in [("con", "con_"), ("NUL", "NUL_"), ("Trip. ", "Trip"), ("What? When: Now*", "What_ When_ Now_")] {
+            let name = crate::names::project_folder_name(typed);
+            assert_eq!(name, folder);
+            let dir = format!("{root}/{name}");
+            assert!(mkdirs(&dir), "{name}");
+            fs::write(format!("{dir}/a.jpg"), b"x").unwrap();
+            assert_eq!(list_files(&dir), vec![format!("{dir}/a.jpg")]);
+        }
+    }
+
+    #[test]
+    fn a_folder_that_does_not_exist_yet_is_on_its_parents_volume() {
+        let (_d, root) = root();
+        assert!(same_volume(&root, &format!("{root}/not/yet/there")));
+        assert!(usable_space(&format!("{root}/not/yet/there")) > 0);
+        assert_eq!(volume_of(&root).map(|v| v.len()), Some(1), "a drive letter");
     }
 }

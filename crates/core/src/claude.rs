@@ -92,6 +92,36 @@ pub fn read_reply(body: &Value, millis: i64) -> Result<TextReply, TextError> {
     Ok(TextReply { text, stop_reason: stop, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), millis })
 }
 
+/// A refused call as the pipeline sees it: the reason from the status, and a line for the log
+/// with the status, the API's error type and its message cut short, never the key.
+pub fn status_error(status: u16, body: &Value, key: &str) -> TextError {
+    let error = body.get("error");
+    let error_type = error.and_then(|e| e.get("type")).and_then(Value::as_str);
+    let message: String = error
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+        .map(|m| hide(m, key).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_SERVER_MESSAGE).collect())
+        .unwrap_or_default();
+    TextError::Unavailable(map_status(status, error_type), format!("Claude call failed ({status} {}): {message}", error_type.unwrap_or("")))
+}
+
+/// A call that got no HTTP answer. A connection that never opened is no network; a reply that
+/// didn't arrive in time is a timeout.
+pub fn transport_error(text: &str, key: &str) -> TextError {
+    let text = hide(text, key);
+    let lower = text.to_lowercase();
+    let reason = if lower.contains("timed out") && !lower.contains("connect") { SortUnavailable::TimedOut } else { SortUnavailable::NoNetwork };
+    TextError::Unavailable(reason, format!("Claude call failed: {text}"))
+}
+
+fn hide(text: &str, key: &str) -> String {
+    if key.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(key, "[key]")
+    }
+}
+
 /// Claude for sorting. Each call reads the current key, so a key changed in Settings applies to
 /// the next call. The call is paid: it is never retried here; the next run tries again.
 pub struct ClaudeTextModel {
@@ -140,24 +170,8 @@ impl TextModel for ClaudeTextModel {
                 let body: Value = response.into_json().map_err(|e| TextError::Unavailable(SortUnavailable::ServiceError, format!("Claude's reply could not be read: {e}")))?;
                 read_reply(&body, millis)
             }
-            Err(ureq::Error::Status(status, response)) => {
-                let body: Value = response.into_json().unwrap_or(Value::Null);
-                let error = body.get("error");
-                let error_type = error.and_then(|e| e.get("type")).and_then(Value::as_str);
-                let message: String = error
-                    .and_then(|e| e.get("message"))
-                    .and_then(Value::as_str)
-                    .map(|m| m.replace(key.trim(), "[key]").split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_SERVER_MESSAGE).collect())
-                    .unwrap_or_default();
-                Err(TextError::Unavailable(map_status(status, error_type), format!("Claude call failed ({status} {}): {message}", error_type.unwrap_or(""))))
-            }
-            Err(ureq::Error::Transport(t)) => {
-                let text = t.to_string().replace(key.trim(), "[key]");
-                let lower = text.to_lowercase();
-                // A connection that never opened is no network; a reply that didn't arrive in time is a timeout.
-                let reason = if lower.contains("timed out") && !lower.contains("connect") { SortUnavailable::TimedOut } else { SortUnavailable::NoNetwork };
-                Err(TextError::Unavailable(reason, format!("Claude call failed: {text}")))
-            }
+            Err(ureq::Error::Status(status, response)) => Err(status_error(status, &response.into_json().unwrap_or(Value::Null), key.trim())),
+            Err(ureq::Error::Transport(t)) => Err(transport_error(&t.to_string(), key.trim())),
         }
     }
 
@@ -165,6 +179,10 @@ impl TextModel for ClaudeTextModel {
         self.cancelled.store(true, Ordering::SeqCst);
     }
 }
+
+#[cfg(test)]
+#[path = "claude_android_cases.rs"]
+mod android_cases;
 
 #[cfg(test)]
 mod tests {
