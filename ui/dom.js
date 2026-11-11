@@ -1,5 +1,15 @@
 // Small DOM helpers: element builder, icons, toasts and the sheet stack.
 
+// The screens pass `cond ? node : null` straight to append and replaceChildren, as they do to h().
+// The browser's own versions print null as the text "null" (seen in the top bar whenever the
+// Simulated tag is absent, so only with real GenieX), so these two skip null and false as h() does.
+for (const name of ['append', 'replaceChildren']) {
+  const own = Element.prototype[name];
+  Element.prototype[name] = function (...children) {
+    return own.apply(this, children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false));
+  };
+}
+
 /** h('div.cls#id', {attrs}, ...children). Children may be nodes, strings, arrays, null. */
 export function h(spec, attrs, ...children) {
   const [tagAndId, ...classes] = spec.split('.');
