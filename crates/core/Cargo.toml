@@ -18,6 +18,7 @@ unicode-normalization = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 thiserror = "2"
 parking_lot = "0.12"
+fs4 = { version = "0.13", features = ["sync"] }
 
 [dev-dependencies]
 tempfile = "3"
