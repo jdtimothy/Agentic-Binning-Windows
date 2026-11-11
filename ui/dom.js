@@ -113,8 +113,10 @@ export function openSheet(build) {
   layer.append(h('div.scrim', { onclick: close }), sheet);
   document.getElementById('sheets').append(layer);
   stack.push(entry);
-  const first = sheet.querySelector('[autofocus]') || sheet.querySelector('input, button.primary') || sheet.querySelector('button');
-  if (first) setTimeout(() => first.focus(), 30);
+  // Focus goes to the field the sheet asks for, else to the sheet itself, so Tab starts at its top.
+  sheet.tabIndex = -1;
+  const first = sheet.querySelector('[autofocus]') || sheet;
+  setTimeout(() => first.focus({ preventScroll: true }), 30);
   return close;
 }
 
