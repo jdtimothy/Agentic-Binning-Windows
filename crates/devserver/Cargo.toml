@@ -1,0 +1,6 @@
+[package]
+name = "binning-devserver"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
