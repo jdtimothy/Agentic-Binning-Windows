@@ -111,12 +111,22 @@ function renderChrome() {
     h('button.ib', { 'aria-label': 'Settings', title: 'Settings', onclick: () => sheets.settings() }, icon('gear')),
   );
   const mtop = $('media-top');
-  mtop.replaceChildren(
-    h('button.ib', { 'aria-label': 'Back to Analyze', title: 'Back (Esc)', onclick: () => show('analyze') }, icon('back')),
-    h('div.ht', h('h1', cur ? cur.name : ''), h('span', S.all ? `${plural(S.all.total, 'item')} · ${plural(S.all.categories.length, 'category', 'categories')}` : '')),
-    b.simulated ? h('span.simtag', 'Simulated') : null,
-    h('button.ib', { 'aria-label': 'Settings', title: 'Settings', onclick: () => sheets.settings() }, icon('gear')),
-  );
+  if (S.selecting) {
+    const shown = S.view ? S.view.rows : [];
+    const allOn = shown.length > 0 && shown.every((r) => S.selected.has(r.id));
+    mtop.replaceChildren(
+      h('button.ib', { 'aria-label': 'Leave select mode', title: 'Leave select mode (Esc)', onclick: () => { S.selecting = false; S.selected.clear(); render(); } }, icon('x')),
+      h('div.ht', h('h1', `${S.selected.size} selected`), h('span', 'Click tiles to add or remove them')),
+      h('button.txtbtn', { onclick: () => { if (allOn) shown.forEach((r) => S.selected.delete(r.id)); else shown.forEach((r) => S.selected.add(r.id)); render(); } }, allOn ? 'Clear' : 'Select all'),
+    );
+  } else {
+    mtop.replaceChildren(
+      h('button.ib', { 'aria-label': 'Back to Analyze', title: 'Back (Esc)', onclick: () => show('analyze') }, icon('back')),
+      h('div.ht', h('h1', cur ? cur.name : ''), h('span', S.all ? `Project media · ${plural(S.all.total, 'item')}` : '')),
+      b.simulated ? h('span.simtag', 'Simulated') : null,
+      h('button.ib', { 'aria-label': 'Settings', title: 'Settings', onclick: () => sheets.settings() }, icon('gear')),
+    );
+  }
 }
 
 export function render() {
@@ -232,15 +242,22 @@ function renderCarousel(stage, rows, p) {
       const lit = live ? (p.phase === 'Describing' ? total : p.framesReady) : (row.hasAnalysis ? total : 0);
       frames = h('div.frames', Array.from({ length: total }, (_, k) => h(`i${k < lit ? '.on' : ''}`)));
     }
-    const badge = row.status === 'Failed' ? h('span.bdg.st.warn', 'Failed') : row.status === 'Missing' ? h('span.bdg.st.warn', 'Missing') : row.status === 'Pending' ? h('span.bdg.st', 'Waiting') : null;
+    // Top corner: Analyzed, then the category once sorted; Failed or Missing; nothing while it waits.
+    const badge = row.status === 'Analyzed' ? h('span.bdg.cat', icon('check', 11), 'Analyzed')
+      : row.status === 'Sorted' || row.status === 'Binned' ? h('span.bdg.cat', icon('check', 11), h('span', row.categoryName || 'Sorted'))
+      : row.status === 'Failed' || row.status === 'Missing' ? h('span.bdg.cat', icon('warn', 11), row.status) : null;
+    const scanning = isCurrent && (p.phase === 'Preparing' || p.phase === 'Describing');
+    if (row.kind !== 'Video') {
+      const part = isCurrent && running() ? (p.phase === 'Describing' ? 0.7 : 0.3) : 0;
+      frames = h('div.pbar', h('i', { style: `width:${row.hasAnalysis ? 100 : part * 100}%` }));
+    }
     cards.push(h(`div.card.glass.strong${cls}`, {
       'data-id': row.id,
       onclick: () => { if (d !== 0) { S.index = i; S.follow = false; render(); } else sheets.detail(row.id); },
       title: d === 0 ? 'Open details' : '',
     },
       h('div.shot', thumbImg(row),
-        isCurrent && running() ? h('span.progress', { style: `width:${p.phase === 'Describing' ? 100 : p.framesTotal ? (100 * p.framesReady) / p.framesTotal : 30}%` }) : null,
-        row.categoryName ? h('span.bdg.cat', row.categoryName) : null,
+        scanning ? h('span.scanline') : null,
         row.kind === 'Video' ? h('span.bdg.dur', icon('play', 10), duration(row.durationMs)) : null,
         badge),
       h('h2', isCurrent || !row.friendlyName ? row.originalName : displayName(row)),
@@ -280,12 +297,11 @@ function analysisBlocks(description, actions, tags, live) {
   out.push(h('h3', 'Description'));
   out.push(h('p.desc.selectable', description || (live ? '' : '—'), live ? h('span.caret') : null));
   if (actions && actions.length) {
-    out.push(h('h3', 'Actions'));
+    out.push(h('h3', 'Action'));
     out.push(h('ul.actions.selectable', actions.map((a) => h('li', h('time', a.t), h('span', a.text)))));
   }
   if (tags && tags.length) {
-    out.push(h('h3', 'Tags'));
-    out.push(h('div.tags', tags.map((t) => h('span.tag', t))));
+    out.push(h('div.tags', tags.map((t) => h('span.tag', `#${t}`))));
   }
   return out;
 }
@@ -356,7 +372,7 @@ function renderMedia() {
   // The search field keeps its node so typing never loses focus or the caret.
   let search = $('search-input');
   if (!search) {
-    search = h('input#search-input', { type: 'search', placeholder: 'Search names, tags, descriptions', 'aria-label': 'Search this project', spellcheck: false, autocomplete: 'off' });
+    search = h('input#search-input', { type: 'search', placeholder: 'Search “sea turtles on the sand”', 'aria-label': 'Search this project', spellcheck: false, autocomplete: 'off' });
     search.addEventListener('input', () => {
       S.query = search.value;
       clearTimeout(searchTimer);
@@ -366,44 +382,60 @@ function renderMedia() {
   }
   if (search.value !== S.query && document.activeElement !== search) search.value = S.query;
   $('search-clear').style.visibility = S.query ? 'visible' : 'hidden';
+  search.disabled = !v.total;
+  search.placeholder = v.total ? 'Search “sea turtles on the sand”' : 'Nothing to search yet';
+  if (!v.total) {
+    // A project with nothing in it: the two ways to add media, as in the project sheet.
+    body.replaceChildren(h('div.emptycard.glass',
+      h('span.ico3', icon('image', 30)),
+      h('h2', 'No photos or clips yet'),
+      h('p', 'Add media and the computer describes each item, then sorts everything into categories. Files stay where they are until you press Bin Files.'),
+      h('button.primary', { onclick: () => sheets.addFolder() }, icon('folder'), 'Add a folder'),
+      h('button.secondary', { onclick: () => sheets.addFiles() }, icon('plus'), 'Pick photos and videos')));
+    renderDock(v);
+    return;
+  }
 
   const busy = running();
   const cats = v.categories.length;
   const chipEl = (c) => h(`button.chip${c.chip === 'waiting' || c.chip === 'failed' ? '.attn' : ''}`, {
     'aria-pressed': String(S.filter.chip === c.chip),
     onclick: () => { S.filter.chip = S.filter.chip === c.chip && c.chip !== 'all' ? 'all' : c.chip; refresh(); },
-  }, c.locked ? icon('lock', 13) : null, c.label, h('span.n', c.count.toLocaleString()));
+  }, c.chip === 'waiting' ? icon('clock', 13) : c.chip === 'failed' ? icon('warn', 13) : c.locked ? icon('lock', 12) : null, c.label, h('span.n', c.count.toLocaleString()));
   const kind = (label, value) => h('button', { 'aria-pressed': String(S.filter.kind === value), onclick: () => { S.filter.kind = value; refresh(); } }, label);
   const chipLabel = v.chips.find((c) => c.chip === S.filter.chip);
+  const chipName = S.filter.chip === 'all' ? 'All categories' : S.filter.chip === 'waiting' ? 'Waiting to be categorized' : chipLabel ? chipLabel.label : 'Category';
   const resultText = v.searching
-    ? `${plural(v.rows.length, 'result')} for “${S.query.trim()}”`
-    : `${chipLabel && S.filter.chip !== 'all' ? chipLabel.label + ' · ' : ''}${plural(v.rows.length, 'item')}`;
+    ? `${plural(v.rows.length, 'result')} for “${S.query.trim()}”${S.filter.chip !== 'all' ? ` in ${chipName}` : ''}`
+    : `${chipName} · ${plural(v.rows.length, 'item')}`;
+  const shotLabel = { wide: 'Wide', medium: 'Medium', close: 'Close-up' };
+  const anySet = S.filter.shotType || S.filter.takenFrom || S.filter.takenTo;
 
   const head = h('div', { style: 'display:flex;flex-direction:column;gap:10px;flex:none' },
     h('div.cathead',
-      h('h3', 'Categories'),
-      h('button.mini', { disabled: busy, title: busy ? 'Re-sort is available when analysis is stopped or done' : 'Sort everything again', onclick: () => sheets.resort() }, icon('shuffle', 16), 'Re-sort'),
-      h('button.mini', { disabled: !cats, onclick: () => sheets.categoryEdit() }, icon('edit', 16), 'Edit')),
+      h('h3', `Categories · ${cats}`),
+      h('button.mini', { disabled: busy, title: busy ? (moving() ? 'Edits wait until the files have moved' : 'Re-sort is available when analysis is stopped or done') : 'Sort everything again', onclick: () => sheets.resort() }, icon('shuffle', 15), 'Re-sort'),
+      h('button.mini', { disabled: busy || !cats, title: busy ? (moving() ? 'Edits wait until the files have moved' : 'Edit is available when analysis is stopped or done') : '', onclick: () => sheets.categoryEdit() }, icon('edit', 15), 'Edit')),
     h('div.chips', v.chips.map(chipEl)),
     h('div.filters',
       h('div.seg', { role: 'group', 'aria-label': 'Kind' }, kind('All', null), kind('Photos', 'Photo'), kind('Videos', 'Video')),
-      h('button.fchip', { onclick: () => sheets.filters() }, 'Filters', icon('down', 14)),
-      S.filter.shotType ? h('button.fchip.set', { title: 'Clear this filter', onclick: () => { S.filter.shotType = null; refresh(); } }, `${S.filter.shotType[0].toUpperCase()}${S.filter.shotType.slice(1)} shots`, icon('x', 13)) : null,
-      S.filter.takenFrom || S.filter.takenTo ? h('button.fchip.set', { title: 'Clear this filter', onclick: () => { S.filter.takenFrom = null; S.filter.takenTo = null; refresh(); } },
-        [S.filter.takenFrom, S.filter.takenTo].map((d) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '…')).join(' – '), icon('x', 13)) : null,
+      S.filter.shotType ? h('span.fchip.set', shotLabel[S.filter.shotType] || S.filter.shotType, h('button', { 'aria-label': 'Clear shot type', onclick: () => { S.filter.shotType = null; refresh(); } }, icon('x', 13))) : null,
+      S.filter.takenFrom ? h('span.fchip.set', sheets.dayLabel(S.filter.takenFrom), h('button', { 'aria-label': 'Clear date', onclick: () => { S.filter.takenFrom = null; S.filter.takenTo = null; refresh(); } }, icon('x', 13))) : null,
+      h(`button.fchip${anySet ? '.set' : ''}`, { onclick: () => sheets.filters() }, 'Filters', icon('down', 14))),
+    h('div.resultline',
       h('span.result', resultText),
-      S.selecting ? h('button.mini', { onclick: () => { v.rows.forEach((r) => S.selected.add(r.id)); render(); } }, 'Select all') : null,
-      h('button.mini', { onclick: () => { S.selecting = !S.selecting; S.selected.clear(); render(); } }, icon('checkbox', 16), S.selecting ? 'Done' : 'Select')));
+      S.selecting ? null : h('button.mini', { title: 'Select tiles (or Ctrl-click one)', onclick: () => { S.selecting = true; S.selected.clear(); render(); } }, icon('checkbox', 15), 'Select')));
 
   const tiles = v.rows.map((row) => {
     const on = S.selected.has(row.id);
-    const sub = row.matchedIn && row.matchedIn !== 'Name' ? `Matched in ${row.matchedIn.toLowerCase()}`
-      : row.status === 'Failed' ? row.failure
-      : row.status === 'Pending' || row.status === 'Analyzing' ? 'Waiting to analyze'
-      : row.status === 'Analyzed' && !row.categoryId ? 'Waiting for a category'
-      : S.filter.chip === 'all' && row.categoryName ? row.categoryName : null;
-    const badge = row.status === 'Failed' ? h('span.bdg.st.warn', 'Failed') : row.status === 'Missing' ? h('span.bdg.st.warn', 'Missing') : null;
-    return h(`button.tile${on ? '.on' : ''}`, {
+    // Under the name only where a search matched; the picture carries the rest (Waiting, Failed, Analyzing).
+    const sub = v.searching && row.matchedIn && row.matchedIn !== 'Name' ? `Matched in ${row.matchedIn.toLowerCase()}` : null;
+    const waiting = row.status === 'Analyzed' && !row.categoryId && !row.categorySetByUser;
+    const badge = row.status === 'Failed' ? h('span.bdg.st.warn', icon('warn', 11), 'Failed')
+      : row.status === 'Missing' ? h('span.bdg.st.warn', 'Missing')
+      : row.status === 'Analyzing' ? h('span.bdg.st', 'Analyzing…')
+      : waiting ? h('span.bdg.st', icon('clock', 11), 'Waiting') : null;
+    return h(`button.tile${on ? '.on' : ''}${row.status === 'Analyzing' ? '.dimmed' : ''}`, {
       'data-id': row.id,
       title: displayName(row),
       onclick: (e) => {
@@ -424,7 +456,7 @@ function renderMedia() {
   });
   const keepScroll = body.querySelector('.gridwrap');
   const scrollTop = keepScroll ? keepScroll.scrollTop : 0;
-  const wrap = h('div.gridwrap', tiles.length ? h('div.grid', tiles) : h('p.nomatch', v.total ? 'Nothing matches. Clear the search or the filters to see everything.' : 'This project has no photos or videos yet.'));
+  const wrap = h('div.gridwrap', tiles.length ? h('div.grid', tiles) : h('p.nomatch', v.searching ? `Nothing in ${project().name} matches “${S.query.trim()}”.` : 'No items match these filters.'));
   body.replaceChildren(head, wrap);
   wrap.scrollTop = scrollTop;
   renderDock(v);
@@ -456,8 +488,8 @@ function renderDock(v) {
   if (S.selecting) {
     const n = S.selected.size;
     parts.push(h('div.dock.glass', h('div.dbtns',
-      h('button.primary', { 'aria-disabled': String(!n), disabled: !n, onclick: () => sheets.moveTo([...S.selected]) }, icon('move'), n ? `Move to category · ${n}` : 'Move to category'),
-      h('button.secondary.danger', { disabled: !n, onclick: () => sheets.removeItems([...S.selected]) }, icon('trash'), 'Remove from project'))));
+      h('button.primary', { 'aria-disabled': String(!n), disabled: !n, onclick: () => sheets.moveTo([...S.selected]) }, icon('move'), 'Move to category'),
+      h('button.secondary.danger', { style: 'flex:1', disabled: !n, onclick: () => sheets.removeItems([...S.selected]) }, icon('trash'), 'Remove from project'))));
   } else {
     const st = v.status;
     const tone = { Running: 'run', Attention: 'warn', Ready: 'ok', Quiet: '' }[st.tone];
@@ -467,12 +499,11 @@ function renderDock(v) {
         h('span.stxt', st.text, notice ? h('span', { style: 'color:var(--sub)' }, ` · ${notice}`) : null),
         st.categorizeNow && !running() ? h('button.link', { onclick: () => api.call('analysis.categorizeNow').catch(fail) }, 'Categorize now') : null),
       h('div.dbtns',
-        h('button.secondary', { title: 'The live analysis view', onclick: () => show('analyze') }, h('i', { style: running() ? 'background:var(--accent)' : '' }), 'Analyze'),
-        h('button.secondary', { title: 'Add photos and videos', onclick: () => sheets.projects() }, icon('plus'), 'Add'),
+        h('button.secondary', { title: 'The live analysis view', onclick: () => show('analyze') }, h('i', { style: 'background:var(--ok)' }), 'Analyze'),
         h(`button.primary${st.binFilesEnabled ? '' : '.off'}`, {
           'aria-disabled': String(!st.binFilesEnabled),
           onclick: () => (st.binFilesEnabled ? sheets.binFiles() : toast(st.blockedReason || 'Nothing to bin yet')),
-        }, icon('bin'), 'Bin Files', st.readyToBin ? h('span.cnt', st.readyToBin.toLocaleString()) : null))));
+        }, icon('bin'), 'Bin Files', st.binFilesEnabled && st.readyToBin ? h('span.cnt', st.readyToBin.toLocaleString()) : null))));
   }
   dock.replaceChildren(...parts);
 }

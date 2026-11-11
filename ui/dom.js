@@ -39,6 +39,7 @@ const PATHS = {
   back: '<path d="M15 5l-7 7 7 7"/>',
   next: '<path d="M9 5l7 7-7 7"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   shuffle: '<path d="M3 7h3.5c5 0 5.5 10 10.5 10H21M3 17h3.5c1.6 0 2.7-1 3.6-2.4M21 7h-4c-1.6 0-2.7 1-3.6 2.4M18 4l3 3-3 3M18 14l3 3-3 3"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/>',

@@ -533,27 +533,51 @@ export function resort() {
   });
 }
 
-export function filters() {
+const dayStart = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+/** "Jul 18", or "Jul 18, 2026" when the project spans more than one year. */
+export function dayLabel(ms) {
+  const years = new Set((S.all ? S.all.rows : []).filter((r) => r.takenAt).map((r) => new Date(r.takenAt).getFullYear()));
+  return new Date(ms).toLocaleDateString('en-US', years.size > 1 ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+
+/** Shot type and Date, each choice with the count the grid would show, then Show. */
+export async function filters() {
+  const f = S.filter;
+  let found;
+  try {
+    // What the search, the chip and the kind toggle leave; the sheet's own two filters are counted here.
+    found = (await api.call('grid', { filter: { chip: f.chip, kind: f.kind }, query: S.query })).rows;
+  } catch (e) { return fail(e); }
+  const all = S.all ? S.all.rows : [];
+  const shotLabel = { wide: 'Wide', medium: 'Medium', close: 'Close-up' };
+  const shots = ['wide', 'medium', 'close'].filter((t) => all.some((r) => r.shotType === t));
+  const days = [...new Set(all.filter((r) => r.takenAt).map((r) => dayStart(r.takenAt)))].sort((a, b) => a - b);
+  let shot = f.shotType;
+  let day = f.takenFrom ? dayStart(f.takenFrom) : null;
+  const count = (s, d) => found.filter((r) => (!s || r.shotType === s) && (!d || (r.takenAt && dayStart(r.takenAt) === d))).length;
   openSheet((close) => {
-    const f = S.filter;
-    const shot = h('select', h('option', { value: '' }, 'Any'), ['wide', 'medium', 'close'].map((t) => h('option', { value: t, selected: f.shotType === t }, t[0].toUpperCase() + t.slice(1))));
-    const day = (ms) => (ms ? new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '');
-    const from = h('input', { type: 'date', value: day(f.takenFrom) });
-    const to = h('input', { type: 'date', value: day(f.takenTo) });
-    const apply = () => {
-      f.shotType = shot.value || null;
-      f.takenFrom = from.value ? new Date(from.value + 'T00:00:00').getTime() : null;
-      f.takenTo = to.value ? new Date(to.value + 'T23:59:59.999').getTime() : null;
-      close();
-      refresh();
+    const body = h('div.sbody');
+    const foot = h('div.sfoot');
+    const option = (label, n, on, pick) => h('button.optrow', { role: 'radio', 'aria-checked': String(on), onclick: () => { pick(); draw(); } }, h('i.radio'), h('span.grow', label), h('span.n', String(n)));
+    const draw = () => {
+      body.replaceChildren(
+        h('span.label', 'Shot type'),
+        option('Any shot type', count(null, day), !shot, () => { shot = null; }),
+        ...shots.map((t) => option(shotLabel[t], count(t, day), shot === t, () => { shot = t; })),
+        h('span.label', { style: 'margin-top:10px' }, 'Date'),
+        option('Any date', count(shot, null), !day, () => { day = null; }),
+        ...days.map((d) => option(dayLabel(d), count(shot, d), day === d, () => { day = d; })));
+      const n = count(shot, day);
+      foot.replaceChildren(h('button.primary', { onclick: () => {
+        f.shotType = shot;
+        f.takenFrom = day;
+        f.takenTo = day ? day + 86400000 - 1 : null;
+        close();
+        refresh();
+      } }, `Show ${n === 1 ? '1 item' : `${n} items`}`));
     };
-    return {
-      title: 'Filters',
-      body: h('div.sbody',
-        h('label.field', h('span.label', 'Shot type'), shot),
-        h('div.two-up', h('label.field', h('span.label', 'Taken from'), from), h('label.field', h('span.label', 'Taken to'), to))),
-      foot: h('div.sfoot', h('button.secondary', { onclick: () => { shot.value = ''; from.value = ''; to.value = ''; apply(); } }, 'Clear'), h('div.spacer'), h('button.secondary', { onclick: close }, 'Cancel'), h('button.primary', { style: 'flex:none', onclick: apply }, 'Save')),
-    };
+    draw();
+    return { title: 'Filters', body, foot };
   });
 }
 

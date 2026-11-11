@@ -831,28 +831,30 @@ impl App {
         let state = self.pipeline.state();
         let check_failed = open.db.last_check_ok()? == Some(false);
         let status = media_status(&counts, active_job(&state), check_failed);
-        // Chips count what the other filters leave, so a chip never promises items a click won't show.
-        let base: Vec<&MediaRow> = all.iter().filter(|r| filter.matches_without_chip(r)).collect();
+        // Chips count what the search and the other filters leave, so a chip never promises items a
+        // click won't show. While searching, categories with no matches drop out of the row.
+        let fts = crate::search::fts_query(query);
+        let hits = fts.as_ref().map(|q| open.db.search(q).unwrap_or_default());
+        let found = |r: &MediaRow| hits.as_ref().is_none_or(|h| h.contains(&r.id));
+        let base: Vec<&MediaRow> = all.iter().filter(|r| filter.matches_without_chip(r) && found(r)).collect();
         let mut chips = vec![json!({"chip": "all", "label": "All", "count": base.len()})];
         let waiting = base.iter().filter(|r| is_waiting(r)).count();
-        if waiting > 0 {
+        if waiting > 0 || filter.chip == "waiting" {
             chips.push(json!({"chip": "waiting", "label": "Waiting", "count": waiting}));
         }
         let failed = base.iter().filter(|r| r.status == ItemStatus::Failed).count();
-        if failed > 0 {
+        if failed > 0 || filter.chip == "failed" {
             chips.push(json!({"chip": "failed", "label": "Failed", "count": failed}));
         }
         for c in &categories {
             let n = base.iter().filter(|r| r.category_id == Some(c.id)).count();
-            if n > 0 {
-                chips.push(json!({"chip": c.id.to_string(), "label": c.name, "count": n, "locked": c.created_by != "model"}));
+            if hits.is_some() && n == 0 && filter.chip != c.id.to_string() {
+                continue;
             }
+            chips.push(json!({"chip": c.id.to_string(), "label": c.name, "count": n, "locked": c.created_by != "model"}));
         }
-        let mut rows: Vec<MediaRow> = all.iter().filter(|r| filter.matches(r)).cloned().collect();
-        let fts = crate::search::fts_query(query);
+        let mut rows: Vec<MediaRow> = all.iter().filter(|r| filter.matches(r) && found(r)).cloned().collect();
         if let Some(q) = &fts {
-            let hits = open.db.search(q).unwrap_or_default();
-            rows.retain(|r| hits.contains(&r.id));
             let matched = open.db.matched_in(q).unwrap_or_default();
             for r in rows.iter_mut() {
                 r.matched_in = matched.iter().find(|(id, _)| *id == r.id).map(|(_, m)| *m);
