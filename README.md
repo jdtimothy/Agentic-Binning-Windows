@@ -13,7 +13,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 
 *These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
 
-> **Status: built and tested without a Snapdragon X PC.** The core logic has about 370 automated tests, most of them the Android app's own test cases run against this code. They pass on Linux and on GitHub's Windows ARM64 machine, with a simulated model. Nothing has run on a Snapdragon X PC yet, and no real `geniex` command has been executed. The tests that need the real thing are written and wait in `crates/core/tests/on_device.rs`. Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
+> **Status: built and tested without a Snapdragon X PC.** The core logic has about 430 automated tests, most of them the Android app's own test cases run against this code. They pass on Linux and on GitHub's Windows ARM64 machine, with a simulated model. Nothing has run on a Snapdragon X PC yet, and no real `geniex` command has been executed. The tests that need the real thing are written and wait in `crates/core/tests/on_device.rs`. Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
 
 ## What you need
 

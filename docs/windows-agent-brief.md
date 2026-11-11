@@ -45,7 +45,7 @@ The Rust build needs Visual Studio Build Tools with the ARM64 C++ tools. WebView
 cargo test -p binning-core
 ```
 
-About 370 tests; all must pass. They use no GenieX and no network. They include the Android app's own test cases (files named `*_android_cases.rs`) and tests only Windows can run (`windows_tests` in `files.rs`, `on_windows` in `moves_android_cases.rs`): a file another program holds, paths over 260 characters, names that differ only in case, reserved names. The same run is green on GitHub's Windows machine, so a failure here is about this PC: report it with its output before going on.
+About 430 tests; all must pass. They use no GenieX and no network. They include the Android app's own test cases (files named `*_android_cases.rs`) and tests only Windows can run (`windows_tests` in `files.rs`, `on_windows` in `moves_android_cases.rs`): a file another program holds, paths over 260 characters, names that differ only in case, reserved names. The same run is green on GitHub's Windows machine, so a failure here is about this PC: report it with its output before going on.
 
 ## Step 2: GenieX
 
@@ -122,8 +122,8 @@ How it looks is the owner's call. Take screenshots of Analyze, Project Media and
 
 - Once a real `geniex infer` has run, paste its real stdout and stderr into the parser tests in `geniex.rs`, replacing the samples written from the CLI's source.
 - A Windows stand-in for GenieX, so `drives_the_geniex_command_line` in `tests/end_to_end.rs` stops being Unix-only.
-- Android unit tests not yet ported, for logic this app shares: `RegistrarTest`, `MediaScannerTest`, `ProjectRegistryTest`, `ProjectOpenRulesTest`, `SettingsStoreTest`, `ApiKeyStoreTest`, and the database tests `SortDaoTest` and `MoveDaoTest`. Port by case list, not line by line, into a `*_android_cases.rs` file beside the module, as the others are.
-- Skip the view-model, Compose, notification and Room migration tests: that code has no counterpart here.
+- The Android app's unit tests for logic this app shares are all ported (files named `*_android_cases.rs`, and sections marked "The Android app's ..." in the smaller modules). Not ported, because that code has no counterpart here: the view-model, Compose, notification, Android Keystore and Room migration tests.
+- The Claude API key store is the one piece with no test on Windows: there it is the signed-in user's real Credential Manager, which a test must never write to. Check it once by hand in Settings only if the owner asks.
 
 If an Android case fails against the Rust code, the Android behaviour is the reference unless `CLAUDE.md` or a comment says the difference is deliberate.
 

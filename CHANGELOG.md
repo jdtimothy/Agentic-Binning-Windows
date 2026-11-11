@@ -17,5 +17,5 @@ model; not yet run on a Snapdragon X PC.
 - Bin Files with the folder check, checked copies, pause, stop, resume after a
   crash, and the report.
 - A simulated model when GenieX is not installed, clearly labelled.
-- About 370 automated tests, most of them the Android app's own cases, plus
+- About 430 automated tests, most of them the Android app's own cases, plus
   tests for real GenieX and a second drive that are run by hand.

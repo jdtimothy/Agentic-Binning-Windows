@@ -1126,6 +1126,10 @@ fn migrate(c: &Connection, from: i32) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "db_android_cases.rs"]
+mod android_cases;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 
