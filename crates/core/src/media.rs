@@ -242,6 +242,32 @@ pub enum PrepareError {
     WorkFile(String),
 }
 
+/// How much each frame differs from the one before it: the mean difference per colour channel
+/// (0-255) between 32 px copies. Colour, not brightness alone: a red square turning blue hardly
+/// changes in brightness. The first entry is 0. Pixels black in both frames are left out, so
+/// the letterbox bars of a tall or wide clip do not water the number down. A frame that cannot be
+/// read counts as no change.
+pub fn frame_changes(image_paths: &[String]) -> Vec<f64> {
+    const EDGE: u32 = 32;
+    const BLACK: u8 = 16;
+    let small: Vec<Option<Vec<u8>>> = image_paths.iter().map(|p| image::open(p).ok().map(|i| i.thumbnail_exact(EDGE, EDGE).to_rgb8().into_raw())).collect();
+    let mut changes = vec![0.0; small.len()];
+    for i in 1..small.len() {
+        let (Some(a), Some(b)) = (&small[i - 1], &small[i]) else { continue };
+        let (mut sum, mut n) = (0u64, 0u64);
+        for (x, y) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
+            if x.iter().chain(y.iter()).any(|v| *v > BLACK) {
+                sum += x.iter().zip(y.iter()).map(|(p, q)| p.abs_diff(*q) as u64).sum::<u64>();
+                n += 3;
+            }
+        }
+        if n > 0 {
+            changes[i] = sum as f64 / n as f64;
+        }
+    }
+    changes
+}
+
 /// A request to pull frames out of a video without FFmpeg.
 pub struct FrameRequest<'a> {
     pub source: &'a str,
@@ -570,6 +596,27 @@ mod tests {
         }
         let found = scan(&root, &|p| p.ends_with("/skip"));
         assert_eq!(found, vec![format!("{root}/a.mp4"), format!("{root}/b.jpg"), format!("{root}/sub/c.png")]);
+    }
+
+    #[test]
+    fn frame_changes_measure_the_picture_not_the_bars() {
+        let d = tempfile::tempdir().unwrap();
+        let frame = |name: &str, grey: u8| {
+            // A wide picture letterboxed on black, as the preparer writes it.
+            let mut img = RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 0]));
+            for y in 16..48 {
+                for x in 0..64 {
+                    img.put_pixel(x, y, image::Rgb([grey, grey, grey]));
+                }
+            }
+            let p = paths::norm(d.path().join(name));
+            img.save(&p).unwrap();
+            p
+        };
+        let changes = frame_changes(&[frame("a.png", 100), frame("b.png", 100), frame("c.png", 140), "missing.jpg".to_string(), frame("d.png", 140)]);
+        assert_eq!(changes.len(), 5);
+        assert_eq!((changes[0], changes[1], changes[3], changes[4]), (0.0, 0.0, 0.0, 0.0));
+        assert!((changes[2] - 40.0).abs() < 3.0, "{changes:?}");
     }
 
     #[test]

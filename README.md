@@ -13,7 +13,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 
 *These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
 
-> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Moves to and from an exFAT drive passed too. Not yet checked: the window's pickers, drag and drop and its own video frame reader. One 12-megapixel photo takes about 2 seconds and a clip about 30, with the model kept loaded by `geniex serve`. A video's action times are not yet reliable. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
+> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Moves to and from an exFAT drive passed too. Not yet checked: the window's pickers, drag and drop and its own video frame reader. One 12-megapixel photo takes about 2 seconds and a clip about 30, with the model kept loaded by `geniex serve`. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
 
 ## What you need
 
@@ -43,7 +43,7 @@ The command behind the last call is written to the activity log in Settings, so 
 
 As on Android, the vision model is loaded once for a run and the sorting model once for a sort, and only one of them is loaded at a time: the server swaps them by itself. One thing differs:
 
-- **Video timestamps are listed, not interleaved.** Every frame is attached ahead of the text, so the frame times are given as a list in the prompt instead of sitting next to their frames. The prompt version is recorded as `analysis-v2-cli`.
+- **A video's actions are timed by the app, not by the model.** Every frame is attached ahead of the text, so a frame's time cannot sit next to it, and the model then labelled its moments with the first few times of the clip. So the main call writes the description, tags and name only. The app compares neighbouring frames, picks the opening and up to four moments where the picture changes most (one from each quarter of the clip), and asks the model in one short call each what happens there. The time is the frame's own. A clip in which nothing changes gets no actions. The prompt version is recorded as `analysis-v3-cli`.
 
 ## How it works
 

@@ -685,7 +685,16 @@ fn analyze_item(inner: &Inner, env: &RunEnv, item: &Item) -> Result<ItemOutcome,
             continue;
         }
         match analysis::parse(&reply.text, item.kind) {
-            Some(result) => {
+            Some(mut result) => {
+                if item.kind == analysis::ItemKind::Video {
+                    match moment_actions(inner, env, item, &media) {
+                        Ok(actions) => result.actions = actions,
+                        Err(end) => {
+                            env.preparer.cleanup(item.id);
+                            return Err(end);
+                        }
+                    }
+                }
                 env.db.save_analysis(item.id, &result, &reply.text, &env.vision.model_id(), prompt::PROMPT_VERSION, &reply.profile).map_err(|e| Err(e.to_string()))?;
                 outcome = Some(ItemOutcome::Analyzed);
                 break;
@@ -698,6 +707,64 @@ fn analyze_item(inner: &Inner, env: &RunEnv, item: &Item) -> Result<ItemOutcome,
         Some(o) => Ok(o),
         None => fail(reason),
     }
+}
+
+/// Puts the actions found so far into the reply the window is showing.
+fn show(inner: &Inner, actions: &[analysis::ActionEntry]) {
+    let so_far = actions.to_vec();
+    inner.update(|s| {
+        if let Some(p) = s.partial.as_mut() {
+            p.actions = so_far;
+        }
+    });
+}
+
+/// A clip's actions: the app picks the moments from how much the frames change, the model says
+/// in one short call each what happens there, and the time is the frame's own. Each action shows
+/// in the window as it arrives. A clip in which nothing changes gets none.
+fn moment_actions(inner: &Inner, env: &RunEnv, item: &Item, media: &crate::media::PreparedMedia) -> Result<Vec<analysis::ActionEntry>, RunEnd> {
+    let changes = crate::media::frame_changes(&media.image_paths);
+    let picked = analysis::moments::pick(&changes);
+    (env.log)(&format!(
+        "Moments of item {}: frames {:?} of {} (change per frame: {})",
+        item.id,
+        picked,
+        changes.len(),
+        changes.iter().map(|c| format!("{c:.0}")).collect::<Vec<_>>().join(" ")
+    ));
+    let mut actions: Vec<analysis::ActionEntry> = Vec::new();
+    for frame in picked {
+        if inner.stopping() {
+            return Err(Ok(Stopped));
+        }
+        let reply = match env.vision.describe_moment(&media.image_paths[frame]) {
+            Ok(r) => r,
+            Err(e) => {
+                if inner.stopping() {
+                    return Err(Ok(Stopped));
+                }
+                (env.log)(&format!("The vision model failed on a moment of item {}: {}", item.id, e.0));
+                return Err(Err(format!("{}: {}", failure::MODEL_FAILED, e.0)));
+            }
+        };
+        if reply.profile.stop_reason == "user" || inner.stopping() {
+            return Err(Ok(Stopped));
+        }
+        let Some(text) = analysis::moments::clean(&reply.text) else { continue };
+        // The same thing in other words says nothing new.
+        if actions.iter().any(|a| analysis::moments::same_thing(&a.text, &text)) {
+            continue;
+        }
+        let time = media.frame_times_ms.get(frame).copied().unwrap_or(0);
+        actions.push(analysis::ActionEntry { t: analysis::moments::clock(time), text });
+        show(inner, &actions);
+    }
+    // The opening alone only repeats the description: every later moment said the same thing.
+    if actions.len() == 1 {
+        actions.clear();
+        show(inner, &actions);
+    }
+    Ok(actions)
 }
 
 // ---------------------------------------------------------------------------------------------

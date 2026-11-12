@@ -518,15 +518,20 @@ fn vision_parts(media: &PreparedMedia) -> Result<(String, Vec<String>), String> 
     if text.contains('/') || text.contains('\\') {
         return Err("The prompt text may not contain a slash".into());
     }
+    Ok((text, image_lines(&media.image_paths)?))
+}
+
+/// Frame paths with forward slashes, each checked to be one line ending in .jpg.
+fn image_lines(paths: &[String]) -> Result<Vec<String>, String> {
     let mut images = Vec::new();
-    for p in &media.image_paths {
+    for p in paths {
         let p = p.replace('\\', "/");
         if p.contains('\n') || !p.to_lowercase().ends_with(".jpg") {
             return Err(format!("Not a usable image path: {p}"));
         }
         images.push(p);
     }
-    Ok((text, images))
+    Ok(images)
 }
 
 /// LFM3-VL through GenieX: one fresh single-turn call per photo or clip.
@@ -573,6 +578,13 @@ impl VisionModel for GenieVisionModel {
             }
         };
         let out = self.cli.infer(&req, &mut forward).map_err(VisionError)?;
+        Ok(VisionReply { text: out.text, profile: out.profile })
+    }
+    fn describe_moment(&self, image: &str) -> Result<VisionReply, VisionError> {
+        let images = image_lines(&[image.to_string()]).map_err(VisionError)?;
+        let key = self.spec.key();
+        let req = InferRequest { model: &key, system: prompt::MOMENT_SYSTEM, user: prompt::MOMENT_TEXT, images: &images, grammar: Some(prompt::MOMENT_GRAMMAR), max_tokens: prompt::MAX_TOKENS_MOMENT, nctx: *self.nctx.lock() };
+        let out = self.cli.infer(&req, &mut |_| {}).map_err(VisionError)?;
         Ok(VisionReply { text: out.text, profile: out.profile })
     }
     fn cancel(&self) {

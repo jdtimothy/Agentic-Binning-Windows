@@ -16,6 +16,9 @@ and frame reader are not yet checked there.
   LFM3-VL-2B through the GenieX command line, sorting with LFM3-1.7B or Claude.
 - One `geniex serve` is kept running for a run, so the model is loaded once
   instead of for every file: about 2 seconds a photo instead of 16.
+- A video's actions sit where the picture changes and carry that frame's own
+  time: the app picks the moments and asks the model about each in a short
+  call. Before, every clip's actions were bunched in its first seconds.
 - Analyze and Project Media screens, search, filters, editing, Re-sort,
   category rename and merge, the failed-item sheet.
 - Bin Files with the folder check, checked copies, pause, stop, resume after a
