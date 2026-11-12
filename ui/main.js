@@ -89,7 +89,12 @@ export function show(screen) {
   S.screen = screen;
   $('analyze').hidden = screen !== 'analyze';
   $('media').hidden = screen !== 'media';
-  if (screen === 'media') refresh();
+  if (screen === 'media') {
+    // Project Media keeps the blobs, as on Android.
+    tintBackdrop(null);
+    $('backdrop').classList.remove('moving');
+    refresh();
+  }
   render();
 }
 
@@ -183,6 +188,14 @@ function thumbImg(row) {
     : icon(row.kind === 'Video' ? 'film' : 'image', 40);
 }
 
+// The cards are redrawn whenever the run reports progress (each video frame, each piece of the
+// reply), and a new element would start its animation again from the top. The line takes its
+// place in the sweep from the clock instead, so it carries on where the one before it was.
+const SCAN_CYCLE_MS = 3600; // Down and back up: twice the 1.8 s in styles.css.
+function scanLine() {
+  return h('span.scanline', { style: `animation-delay:-${Math.round(performance.now() % SCAN_CYCLE_MS)}ms` });
+}
+
 function renderAnalyze() {
   const p = S.pipeline;
   const [tone, text] = phaseLine(p);
@@ -195,6 +208,9 @@ function renderAnalyze() {
 
   const stage = $('stage');
   const rows = S.all ? S.all.rows : [];
+  // The backdrop drifts only while items are analyzed: a moving backdrop is blurred again by every panel.
+  $('backdrop').classList.toggle('moving', running() && !['Paused', 'Moving', 'MovingPaused'].includes(p.phase));
+  if (!project() || !rows.length) tintBackdrop(null);
   if (!project()) {
     stage.replaceChildren(h('div.empty', { style: 'grid-column:1/-1;grid-row:1/-1' },
       h('h2', 'No project open'),
@@ -255,7 +271,7 @@ function renderCarousel(stage, rows, p) {
       title: d === 0 ? 'Open details' : '',
     },
       h('div.shot', thumbImg(row),
-        scanning ? h('span.scanline') : null,
+        scanning ? scanLine() : null,
         row.kind === 'Video' ? h('span.bdg.dur', icon('play', 10), duration(row.durationMs)) : null,
         badge),
       h('h2', isCurrent || !row.friendlyName ? row.originalName : displayName(row)),
@@ -333,14 +349,67 @@ async function renderOutput(box, row, p) {
   box.replaceChildren(...blocks);
 }
 
-let tintFor = null;
-/** Takes the backdrop's three blob colours from the picture in view. */
+// The Analyze backdrop, as the Android app's ThumbnailBackdrop: the picture in view shrunk to 20 px
+// on its long edge and box-blurred, so only soft colour fields are left, then stretched over the
+// window. The numbers are Android's; the fade, drift and scrim are in styles.css.
+const ABSTRACT_EDGE_PX = 20;
+const BLUR_RADIUS_PX = 3;
+const BLUR_PASSES = 3;
+const CROSSFADE_MS = 2300;
+
+/** One pass of a box blur along rows or columns, edges repeated. */
+function boxBlur(px, w, h, horizontal) {
+  const src = px.slice();
+  const [len, lines] = horizontal ? [w, h] : [h, w];
+  const at = (line, i) => 4 * (horizontal ? line * w + i : i * w + line);
+  for (let line = 0; line < lines; line++) {
+    for (let i = 0; i < len; i++) {
+      for (let ch = 0; ch < 3; ch++) {
+        let sum = 0;
+        for (let k = -BLUR_RADIUS_PX; k <= BLUR_RADIUS_PX; k++) sum += src[at(line, Math.max(0, Math.min(len - 1, i + k))) + ch];
+        px[at(line, i) + ch] = sum / (2 * BLUR_RADIUS_PX + 1);
+      }
+    }
+  }
+}
+
+/** A tiny blurred copy of `img` as a data URL; the browser only has to stretch it. */
+function abstractColour(img) {
+  const scale = ABSTRACT_EDGE_PX / Math.max(img.naturalWidth, img.naturalHeight, 1);
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(img.naturalWidth * scale));
+  c.height = Math.max(2, Math.round(img.naturalHeight * scale));
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, c.width, c.height);
+  const data = g.getImageData(0, 0, c.width, c.height);
+  for (let pass = 0; pass < BLUR_PASSES; pass++) {
+    boxBlur(data.data, c.width, c.height, true);
+    boxBlur(data.data, c.width, c.height, false);
+  }
+  g.putImageData(data, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+let backdropFor = null;
+/**
+ * Puts the picture in view behind the Analyze screen and takes the three blob colours from it.
+ * A row without a thumbnail yet keeps the last picture; no row at all (no project, no media, or
+ * another screen) goes back to the blobs.
+ */
 function tintBackdrop(row) {
-  if (!row || !row.thumb || tintFor === row.thumb) return;
-  tintFor = row.thumb;
+  const photo = $('backdrop-photo');
+  if (!row) {
+    backdropFor = null;
+    photo.classList.remove('on');
+    return;
+  }
+  const key = row.thumb ? `${row.thumb}|${row.thumbAt}` : null;
+  if (!key || backdropFor === key) return;
+  backdropFor = key;
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
+    if (backdropFor !== key) return; // the carousel moved on while it loaded
     try {
       const c = document.createElement('canvas');
       c.width = 3; c.height = 1;
@@ -348,9 +417,18 @@ function tintBackdrop(row) {
       g.drawImage(img, 0, 0, 3, 1);
       const px = g.getImageData(0, 0, 3, 1).data;
       document.querySelectorAll('#backdrop i').forEach((el, i) => { el.style.backgroundColor = `rgb(${px[i * 4]},${px[i * 4 + 1]},${px[i * 4 + 2]})`; });
-    } catch { /* a picture the canvas may not read: keep the colours */ }
+      const layer = h('div.layer', { style: `background-image:url(${abstractColour(img)})` });
+      const drift = photo.querySelector('.drift');
+      const before = [...drift.children];
+      drift.append(layer);
+      layer.getBoundingClientRect(); // so the fade starts from clear
+      layer.classList.add('in');
+      photo.classList.add('on');
+      // The pictures underneath are covered once the new one has faded in.
+      setTimeout(() => before.forEach((old) => old.remove()), CROSSFADE_MS + 100);
+    } catch { /* a picture the canvas may not read: keep what is shown */ }
   };
-  img.src = api.fileUrl(row.thumb);
+  img.src = api.fileUrl(row.thumb, row.thumbAt);
 }
 
 // ---------------------------------------------------------------------------------------------

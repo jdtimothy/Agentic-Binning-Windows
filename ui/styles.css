@@ -51,6 +51,22 @@ svg { flex: none; display: block; }
 #backdrop i:nth-child(1) { width: 46vmax; height: 46vmax; left: -14vmax; top: -8vmax; background: #2F6E8F; }
 #backdrop i:nth-child(2) { width: 40vmax; height: 40vmax; right: -12vmax; top: 22vh; background: #F2A65A; }
 #backdrop i:nth-child(3) { width: 44vmax; height: 44vmax; left: 18vw; bottom: -22vmax; background: #3E8F6E; }
+/* On Analyze the picture in view fills the backdrop, shrunk to soft colour fields by main.js (the Android app's
+   ThumbnailBackdrop). A new picture fades in over the last; while items are analyzed it breathes (1.08 to 1.16 and
+   back in 40 s) and drifts (3% across, 2% up and down, 45 s a round); otherwise it holds still. A scrim of the
+   theme's background keeps the glass legible. With no picture the blobs above show. */
+#backdrop-photo { position: absolute; inset: 0; opacity: 0; transition: opacity 2300ms ease; animation: backdrop-breathe 40s ease-in-out infinite paused; }
+#backdrop-photo.on { opacity: 1; }
+#backdrop-photo .drift { position: absolute; inset: 0; animation: backdrop-drift 45s ease-in-out infinite paused; }
+#backdrop.moving #backdrop-photo, #backdrop.moving #backdrop-photo .drift { animation-play-state: running; }
+#backdrop-photo .layer { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0; transition: opacity 2300ms ease; }
+#backdrop-photo .layer.in { opacity: 1; }
+#backdrop-scrim { position: absolute; inset: 0; background: var(--bg); opacity: 0; transition: opacity 2300ms ease; }
+#backdrop-photo.on + #backdrop-scrim { opacity: var(--photo-scrim, 0.5); }
+:root[data-theme="light"] { --photo-scrim: 0.42; }
+@keyframes backdrop-breathe { 0%, 100% { transform: scale(1.08); } 50% { transform: scale(1.16); } }
+@keyframes backdrop-drift { 0%, 100% { transform: translate(-3%, 2%); } 33.3% { transform: translate(3%, -2%); } }
+@media (prefers-reduced-motion: reduce) { #backdrop-photo, #backdrop-photo .drift { animation: none; transform: scale(1.08); } }
 
 #app { position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column; }
 .screen { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; padding: 16px 20px 18px; gap: 12px; }
@@ -318,6 +334,7 @@ span.fchip.set button { width: 24px; height: 24px; border-radius: 50%; display: 
 .bdg.cat span { overflow: hidden; text-overflow: ellipsis; }
 .card .pbar { height: 6px; margin: 4px 6px 0; border-radius: 3px; background: var(--track); overflow: hidden; }
 .card .pbar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 400ms ease; }
+/* main.js sets a negative animation-delay from the clock, so a redrawn line continues the sweep; keep SCAN_CYCLE_MS there at twice this duration */
 .scanline { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); box-shadow: 0 0 14px 2px var(--accent); animation: scan 1.8s cubic-bezier(0.42, 0, 0.58, 1) infinite alternate; }
 @keyframes scan { from { top: 4%; } to { top: 96%; } }
 .tag { border: 1px solid var(--border); }
