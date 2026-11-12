@@ -55,11 +55,15 @@ export async function refresh() {
   if (!project()) {
     S.all = null;
     S.view = null;
+    S.queue = [];
     render();
     return;
   }
   try {
     S.all = await api.call('grid', {});
+    // The Analyze cards stand in the order the run takes them (by id, as the Android carousel's
+    // observeAll); Project Media keeps the grid's order by date taken.
+    S.queue = [...S.all.rows].sort((a, b) => a.id - b.id);
     S.view = filtered() ? await api.call('grid', { filter: S.filter, query: S.query }) : S.all;
     const ids = new Set(S.all.rows.map((r) => r.id));
     for (const id of [...S.selected]) if (!ids.has(id)) S.selected.delete(id);
@@ -73,7 +77,7 @@ export async function refresh() {
 
 function followCurrent() {
   if (!S.all) return;
-  const rows = S.all.rows;
+  const rows = S.queue;
   if (S.follow && S.pipeline && S.pipeline.currentItemId) {
     const i = rows.findIndex((r) => r.id === S.pipeline.currentItemId);
     if (i >= 0) S.index = i;
@@ -207,7 +211,7 @@ function renderAnalyze() {
   );
 
   const stage = $('stage');
-  const rows = S.all ? S.all.rows : [];
+  const rows = S.all ? S.queue : [];
   // The backdrop drifts only while items are analyzed: a moving backdrop is blurred again by every panel.
   $('backdrop').classList.toggle('moving', running() && !['Paused', 'Moving', 'MovingPaused'].includes(p.phase));
   if (!project() || !rows.length) tintBackdrop(null);
@@ -239,14 +243,47 @@ function renderAnalyze() {
   );
 }
 
+// The carousel, its cards and the text panel are kept between draws. A card slides because its
+// own element changes place; one built anew for every draw would only ever appear where it ends up.
+let carouselEl = null;
+let outputEl = null;
+let navPrev = null;
+let navNext = null;
+const cardEls = new Map(); // item id -> its card
+
+function buildCarousel() {
+  navPrev = h('button.ib.navbtn.l.glass', { 'aria-label': 'Previous', onclick: (e) => { e.stopPropagation(); step(-1); } }, icon('back'));
+  navNext = h('button.ib.navbtn.r.glass', { 'aria-label': 'Next', onclick: (e) => { e.stopPropagation(); step(1); } }, icon('next'));
+  const carousel = h('div.carousel', { tabindex: 0, 'aria-label': 'Items', role: 'group' }, navPrev, navNext);
+  carousel.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) + Math.abs(e.deltaX) < 20) return;
+    e.preventDefault();
+    if (carousel.dataset.wheel) return;
+    carousel.dataset.wheel = '1';
+    step(e.deltaY + e.deltaX > 0 ? 1 : -1);
+    setTimeout(() => { delete carousel.dataset.wheel; }, 220);
+  }, { passive: false });
+  carouselEl = carousel;
+  outputEl = h('div.output.glass');
+}
+
 function renderCarousel(stage, rows, p) {
   followCurrent();
   const at = S.index;
-  const cards = [];
+  if (!carouselEl) buildCarousel();
+  // Back on the stage after an empty screen: the cards start afresh, with nothing to slide from.
+  if (carouselEl.parentNode !== stage) {
+    for (const el of cardEls.values()) el.remove();
+    cardEls.clear();
+    stage.replaceChildren(carouselEl, outputEl);
+  }
+  const wanted = new Set();
+  const entering = [];
+  const fresh = new Map();
   for (let i = Math.max(0, at - 2); i <= Math.min(rows.length - 1, at + 2); i++) {
     const row = rows[i];
     const d = i - at;
-    const cls = d === 0 ? '' : d === -1 ? '.prev' : d === 1 ? '.next' : d < 0 ? '.far-prev' : '.far-next';
+    const cls = d === 0 ? '' : d === -1 ? ' prev' : d === 1 ? ' next' : d < 0 ? ' far-prev' : ' far-next';
     const isCurrent = p.currentItemId === row.id;
     // Every clip shows its frame dots; they light up as the frames are read, and stay lit once analyzed.
     let frames = null;
@@ -265,44 +302,53 @@ function renderCarousel(stage, rows, p) {
       const part = isCurrent && running() ? (p.phase === 'Describing' ? 0.7 : 0.3) : 0;
       frames = h('div.pbar', h('i', { style: `width:${row.hasAnalysis ? 100 : part * 100}%` }));
     }
-    cards.push(h(`div.card.glass.strong${cls}`, {
-      'data-id': row.id,
-      onclick: () => { if (d !== 0) { S.index = i; S.follow = false; render(); } else sheets.detail(row.id); },
-      title: d === 0 ? 'Open details' : '',
-    },
-      h('div.shot', thumbImg(row),
-        scanning ? scanLine() : null,
-        row.kind === 'Video' ? h('span.bdg.dur', icon('play', 10), duration(row.durationMs)) : null,
-        badge),
+    const className = `card glass strong${cls}`;
+    wanted.add(row.id);
+    let card = cardEls.get(row.id);
+    if (!card) {
+      // A card new to the window comes in from the far side it is on.
+      card = h('div', { 'data-id': row.id });
+      card.className = cardEls.size ? `card glass strong ${d < 0 ? 'far-prev' : 'far-next'}` : className;
+      carouselEl.insertBefore(card, navPrev);
+      if (card.className !== className) entering.push([card, className]);
+    } else if (card.className !== className) card.className = className;
+    card.onclick = () => { if (d !== 0) { S.index = i; S.follow = false; render(); } else sheets.detail(row.id); };
+    card.title = d === 0 ? 'Open details' : '';
+    // The picture stays as it is unless it changed: a new <img> would flash while it loads.
+    const src = row.thumb ? api.fileUrl(row.thumb, row.thumbAt) : '';
+    const shot = card.firstChild && card.firstChild.dataset.src === src ? card.firstChild : h('div.shot', { 'data-src': src }, thumbImg(row));
+    while (shot.childNodes.length > 1) shot.lastChild.remove();
+    shot.append(
+      scanning ? scanLine() : null,
+      row.kind === 'Video' ? h('span.bdg.dur', icon('play', 10), duration(row.durationMs)) : null,
+      badge);
+    card.replaceChildren(shot,
       h('h2', isCurrent || !row.friendlyName ? row.originalName : displayName(row)),
       h('p', cardSub(row)),
-      frames));
+      frames);
+    fresh.set(row.id, card);
   }
-  const carousel = h('div.carousel', { tabindex: 0, 'aria-label': 'Items', role: 'group' },
-    cards,
-    h('button.ib.navbtn.l.glass', { 'aria-label': 'Previous', disabled: at <= 0, onclick: (e) => { e.stopPropagation(); step(-1); } }, icon('back')),
-    h('button.ib.navbtn.r.glass', { 'aria-label': 'Next', disabled: at >= rows.length - 1, onclick: (e) => { e.stopPropagation(); step(1); } }, icon('next')));
-  carousel.addEventListener('wheel', (e) => {
-    if (Math.abs(e.deltaY) + Math.abs(e.deltaX) < 20) return;
-    e.preventDefault();
-    if (carousel.dataset.wheel) return;
-    carousel.dataset.wheel = '1';
-    step(e.deltaY + e.deltaX > 0 ? 1 : -1);
-    setTimeout(() => { delete carousel.dataset.wheel; }, 220);
-  }, { passive: false });
-  const output = h('div.output.glass');
-  stage.replaceChildren(carousel, output);
-  renderOutput(output, rows[at], p);
+  for (const [id, card] of cardEls) {
+    if (!wanted.has(id)) { card.remove(); cardEls.delete(id); }
+  }
+  for (const [id, card] of fresh) cardEls.set(id, card);
+  if (entering.length) {
+    void carouselEl.offsetWidth; // the starting place has to be laid out before the move to the real one
+    for (const [card, className] of entering) card.className = className;
+  }
+  navPrev.disabled = at <= 0;
+  navNext.disabled = at >= rows.length - 1;
+  renderOutput(outputEl, rows[at], p);
   tintBackdrop(rows[at]);
 }
 
 export function step(by) {
-  if (!S.all || !S.all.rows.length) return;
-  const next = Math.max(0, Math.min(S.all.rows.length - 1, S.index + by));
+  if (!S.all || !S.queue.length) return;
+  const next = Math.max(0, Math.min(S.queue.length - 1, S.index + by));
   if (next === S.index) return;
   S.index = next;
   // Walking back to the item being analyzed picks the live view up again.
-  S.follow = S.pipeline.currentItemId === S.all.rows[next].id;
+  S.follow = S.pipeline.currentItemId === S.queue[next].id;
   render();
 }
 
@@ -337,7 +383,7 @@ async function renderOutput(box, row, p) {
       d = await api.call('item.detail', { id: row.id });
       S.details.set(row.id, d);
     } catch (e) { return fail(e); }
-    if (!S.all || S.all.rows[S.index] !== row) return; // the carousel moved on meanwhile
+    if (!S.all || S.queue[S.index] !== row) return; // the carousel moved on meanwhile
   }
   if (!d) return;
   const blocks = [];
@@ -636,7 +682,7 @@ function onKey(e) {
       e.preventDefault();
       const paused = S.pipeline.phase === 'Paused' || S.pipeline.phase === 'MovingPaused' || !running();
       api.call(paused ? 'analysis.resume' : 'analysis.pause').catch(fail);
-    } else if (e.key === 'Enter' && S.all && S.all.rows[S.index] && document.activeElement.tagName !== 'BUTTON') sheets.detail(S.all.rows[S.index].id);
+    } else if (e.key === 'Enter' && S.all && S.queue[S.index] && document.activeElement.tagName !== 'BUTTON') sheets.detail(S.queue[S.index].id);
     else if (e.key.toLowerCase() === 'm' && project()) show('media');
   } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && S.view) {
     e.preventDefault();
