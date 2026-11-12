@@ -22,6 +22,8 @@ const IMAGE_QUALITY: u8 = 90;
 const THUMB_QUALITY: u8 = 85;
 /// Frames one FFmpeg run cuts from a clip.
 const FRAMES_PER_RUN: usize = 16;
+/// Threads each decoder gets in a run that opens the clip once per frame.
+const DECODER_THREADS: &str = "2";
 
 /// The media kind of a file judged by its extension, or None if it is not a supported type.
 pub fn kind_of(path: &str) -> Option<ItemKind> {
@@ -518,8 +520,12 @@ impl MediaPreparer {
         for (batch, chunk) in times.chunks(FRAMES_PER_RUN).enumerate() {
             let mut cmd = quiet_command(ffmpeg);
             cmd.args(["-v", "error", "-y"]);
+            // Two threads for each clip's decoder. Left to itself FFmpeg gives every one of the 16 a
+            // thread per core, each holding frames: 23 GB for a 4K HEVC clip on an 18-core PC, 4 to
+            // 13 GB for the owner's other 13 clips. With two it is 1 to 4 GB, the frames are the
+            // same bytes, and no clip took longer (most were quicker).
             for t in chunk {
-                cmd.args(["-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"]).arg(path);
+                cmd.args(["-threads", DECODER_THREADS, "-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"]).arg(path);
             }
             for (i, t) in chunk.iter().enumerate() {
                 cmd.args(["-map", &format!("{i}:v:0"), "-frames:v", "1", "-q:v", "3", "-vf", &pad]).arg(file_for(*t));
