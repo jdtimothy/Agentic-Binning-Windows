@@ -1141,6 +1141,9 @@ impl App {
                 }
                 let app = self.clone();
                 self.adds_running.fetch_add(1, Ordering::SeqCst);
+                // Copied files wait with their thumbnails as added ones do. The thread Add started
+                // has ended by now: everything it was given is held by another project.
+                self.start_thumbnails(&open);
                 std::thread::spawn(move || {
                     let emit = app.emit.clone();
                     let result = projects::copy_shared(&open.project.path, &open.db, &app.ffmpeg(), &a.held, &|done, total| emit("copy", json!({"done": done, "total": total})));
@@ -1150,6 +1153,8 @@ impl App {
                         app.pipeline.refresh_counts(&open.db);
                         if result.copied > 0 {
                             app.start_analysis(&open);
+                            // In case the thumbnail thread ended just before the last files were copied.
+                            app.start_thumbnails(&open);
                         }
                     }
                     (app.emit)("copy", json!({"finished": true, "result": result}));

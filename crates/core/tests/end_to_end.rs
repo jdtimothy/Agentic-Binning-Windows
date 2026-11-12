@@ -245,6 +245,46 @@ fn held_files_are_reported_and_can_be_copied() {
     h.app.shutdown();
 }
 
+/// Files copied from another project wait with their thumbnails too. Seen in the installed app:
+/// 14 copied clips showed blank cards until each was analyzed, because only Add started the
+/// thumbnail thread and it had ended (nothing was added) before the copy began.
+#[test]
+fn copied_files_get_thumbnails_while_they_wait() {
+    let h = harness();
+    let photos: Vec<String> = (0..6).map(|i| h.photo(&format!("cam/p{i}.png"), [10 + i * 30, 90, 200 - i * 20])).collect();
+    h.call("project.create", json!({"name": "First"}));
+    h.call("media.addFiles", json!({"paths": photos}));
+    h.wait_for_event("registration", |v| v["finished"] == true);
+    h.settle();
+    h.call("project.create", json!({"name": "Second"}));
+    h.events.lock().clear();
+    h.call("media.addFiles", json!({"paths": photos}));
+    let done = h.wait_for_event("registration", |v| v["finished"] == true);
+    assert_eq!(done["summary"]["held"].as_array().unwrap().len(), 6);
+    h.settle();
+    // The thread Add started looks for work every 200 ms and ends when it finds none; a person
+    // takes longer than that to answer the notice.
+    std::thread::sleep(Duration::from_millis(500));
+    *h.app.mock_delay.lock() = Duration::from_millis(3);
+    h.events.lock().clear();
+    h.call("media.copyHeld", json!({"held": done["summary"]["held"]}));
+    h.wait_for_event("pipeline", |v| v["phase"] == "Describing");
+    h.call("analysis.stop", json!({}));
+    h.settle();
+    assert!(h.app.pipeline.state().pending > 0, "the run was stopped with items still waiting");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let grid = h.call("grid", json!({}));
+        let rows = grid["rows"].as_array().unwrap();
+        if rows.iter().all(|r| r["thumb"].is_string()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "copied items waiting never got thumbnails: {rows:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    h.app.shutdown();
+}
+
 /// Compiles `tests/fixtures/fake_geniex.rs` with the `rustc` that runs the tests, so the stand-in
 /// is a real program on every platform (a script would need a shebang, or Python on the machine).
 fn build_fake_geniex(dir: &str) -> String {
