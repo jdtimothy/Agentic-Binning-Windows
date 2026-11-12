@@ -54,16 +54,20 @@ pub struct PartialAnalysis {
 pub mod prompt {
     use super::ItemKind;
 
-    /// The Android app's `analysis-v2` prompt; `cli` marks that frames reach the model through the
-    /// GenieX command line, which places every image ahead of the text.
-    pub const PROMPT_VERSION: &str = "analysis-v2-cli";
+    /// `v3`: the main call no longer writes a video's actions. The app picks the moments itself
+    /// (see [`super::moments`]) and asks about each in a short call of its own, because the model
+    /// labelled its moments with the first few timestamps whatever the clip's length. `cli` marks
+    /// that frames reach the model through GenieX's chat template, which places every image
+    /// ahead of the text. Android's version is `analysis-v2`.
+    pub const PROMPT_VERSION: &str = "analysis-v3-cli";
     pub const MAX_TOKENS_PHOTO: u32 = 400;
     pub const MAX_TOKENS_VIDEO: u32 = 520;
+    pub const MAX_TOKENS_MOMENT: u32 = 40;
 
     pub const SYSTEM: &str = "You catalogue a personal photo and video library. Look carefully and report only what is visible.\n\
 Reply with one JSON object and nothing else, with these keys:\n\
 \"description\": 1-3 plain sentences: the subject, the setting, and anything notable.\n\
-\"actions\": for a video, 2-5 entries {\"t\": \"m:ss\", \"text\": \"what happens\"} in time order, using the timestamps shown; for a photo, [].\n\
+\"actions\": always [].\n\
 \"tags\": 5-10 short lowercase keywords for searching (subjects, setting, activity, time of day).\n\
 \"suggested_name\": 2-5 words naming the shot, like \"Sea lions on the rocks\". No file extension, no date.\n\
 \"shot_type\": \"wide\", \"medium\" or \"close\".";
@@ -82,44 +86,126 @@ Reply with one JSON object and nothing else, with these keys:\n\
         }
     }
 
-    const ROOT: &str = r#"root    ::= "{" ws "\"description\":" ws str "," ws "\"actions\":" ws actions "," ws "\"tags\":" ws strs "," ws "\"suggested_name\":" ws str "," ws "\"shot_type\":" ws shot ws "}""#;
+    const ROOT: &str = r#"root    ::= "{" ws "\"description\":" ws str "," ws "\"actions\": []," ws "\"tags\":" ws strs "," ws "\"suggested_name\":" ws str "," ws "\"shot_type\":" ws shot ws "}""#;
 
     const SHARED: &str = r#"strs    ::= "[" ws str ( "," ws str ){2,9} ws "]"
 shot    ::= "\"wide\"" | "\"medium\"" | "\"close\""
 str     ::= "\"" ( [^"\\\x7F\x00-\x1F] | "\\" ["\\/bfnrt] )* "\""
 ws      ::= [ \t\n]*"#;
 
-    const VIDEO_ACTIONS: &str = r#"actions ::= "[" ws action ( "," ws action ){1,4} ws "]"
-action  ::= "{" ws "\"t\":" ws ts "," ws "\"text\":" ws str ws "}"
-ts      ::= "\"" [0-9] [0-9]? ":" [0-5] [0-9] "\"""#;
-
-    const PHOTO_ACTIONS: &str = r#"actions ::= "[" ws "]""#;
-
-    /// GBNF grammar constraining the reply to the JSON shape: a video has 2-5 actions with `m:ss`
-    /// times, a photo exactly `[]`; both have 3-10 tags. Uses llama.cpp's `{m,n}` repetition.
-    pub fn grammar(kind: ItemKind) -> String {
-        let actions = match kind {
-            ItemKind::Photo => PHOTO_ACTIONS,
-            ItemKind::Video => VIDEO_ACTIONS,
-        };
-        [ROOT, actions, SHARED].join("\n")
+    /// GBNF grammar constraining the reply to the JSON shape: `actions` is exactly `[]` for a
+    /// photo and for a video (the app adds a video's actions afterwards); 3-10 tags. The `[]` is
+    /// fixed text with no free white space before it: given the choice, the model wrote blank
+    /// space after `"actions":` for a busy clip until the reply was cut off. Uses llama.cpp's
+    /// `{m,n}` repetition.
+    pub fn grammar(_kind: ItemKind) -> String {
+        [ROOT, SHARED].join("\n")
     }
 
-    /// The user turn's text. The GenieX CLI hoists every image ahead of the text, so the frame
-    /// times cannot sit beside their frames as they do on Android; they are listed in order instead.
+    /// The user turn's text. Every image is placed ahead of the text, so a frame's time cannot
+    /// sit beside it as on Android; the model is told only that the frames are in order.
     pub fn user_text(kind: ItemKind, frame_times_ms: &[i64]) -> String {
         match kind {
             ItemKind::Photo => instruction(kind).to_string(),
-            ItemKind::Video => {
-                let times: Vec<String> = frame_times_ms.iter().map(|t| super::timing::clock(*t)).collect();
-                format!(
-                    "Video: the {} images are frames of one clip in time order, taken at these timestamps: {}.\n{}",
-                    frame_times_ms.len(),
-                    times.join(", "),
-                    instruction(kind)
-                )
+            ItemKind::Video => format!("Video: the {} images are frames of one clip in time order.\n{}", frame_times_ms.len(), instruction(kind)),
+        }
+    }
+
+    /// The system prompt of the short call that says what happens at one moment of a clip.
+    pub const MOMENT_SYSTEM: &str = "You describe one moment of a video in one short phrase of at most 14 words. Report only what is visible: name the subject, then what it does. Reply with the phrase and nothing else.";
+
+    /// One sentence starting with a capital and ending at its first full stop, where the reply
+    /// stops. Ending at a line break instead was tried on real clips: the model never wrote one
+    /// and ran on to the token limit, repeating itself. The cost is that "St. Patrick's Day" is
+    /// cut at "St".
+    pub const MOMENT_GRAMMAR: &str = r#"root ::= [A-Z] [^\n\r"{}.<|]{3,160} ".""#;
+
+    /// The user turn of a moment call. The call gets the one frame at the moment and nothing
+    /// about the rest of the clip. Both other ways were tried on real GenieX: given the frame
+    /// before as well, the model described that one (a red square, when the moment was the square
+    /// turning blue); given the clip's description, it repeated the description's ending for a
+    /// frame half a second in.
+    pub const MOMENT_TEXT: &str = "This image is one frame of a video clip.\nIn one short phrase, say what is happening in it.";
+}
+
+/// Which moments of a clip get an action, and the action's time and text. The app decides when;
+/// the model only says what. The idea is from the owner's earlier Agentic Video Binning project,
+/// which measures motion and ties each model call to a few frames from one stretch of the clip.
+pub mod moments {
+    /// The opening and up to four later moments.
+    pub const MAX_LATER: usize = 4;
+    /// Mean change between two frames (0-255, on a 32 px copy) below which nothing happened.
+    /// Measured on 14 real clips: a locked-off or gently hand-held shot of something still stays
+    /// under 8 (and got the same phrase for every moment); waves breaking, a pan to something
+    /// new or a person leaving the picture reach 10 and more.
+    pub const QUIET: f64 = 8.0;
+    /// A later moment must also reach this share of the clip's largest change.
+    const SHARE_OF_PEAK: f64 = 0.4;
+
+    /// The frames that get an action, in order. `changes[i]` is how much frame `i` differs from
+    /// frame `i - 1` (`changes[0]` is unused). A clip in which nothing changes gets none. Otherwise
+    /// frame 0 is the opening, and the frames after it are split into up to four equal stretches,
+    /// each giving its most-changed frame if that change is large enough. So the moments are
+    /// spread over the clip and sit where the picture moves.
+    pub fn pick(changes: &[f64]) -> Vec<usize> {
+        let n = changes.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let peak = changes[1..].iter().cloned().fold(0.0, f64::max);
+        if peak < QUIET {
+            return Vec::new();
+        }
+        let floor = QUIET.max(peak * SHARE_OF_PEAK);
+        let later = n - 1;
+        let stretches = MAX_LATER.min(later);
+        let mut picked = vec![0];
+        for s in 0..stretches {
+            let from = 1 + later * s / stretches;
+            let to = 1 + later * (s + 1) / stretches;
+            let best = (from..to).fold(from, |best, i| if changes[i] > changes[best] { i } else { best });
+            if changes[best] >= floor {
+                picked.push(best);
             }
         }
+        picked
+    }
+
+    /// `m:ss`, to the nearest second.
+    pub fn clock(time_ms: i64) -> String {
+        let seconds = (time_ms.max(0) + 500) / 1000;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+
+    /// The model's phrase as an action's text: one line, no quotes or closing full stop. None when
+    /// there is no usable phrase.
+    pub fn clean(text: &str) -> Option<String> {
+        let line = text.trim().lines().next().unwrap_or("");
+        // Without the grammar (`geniex infer` on an old CLI) a reply can run into the model's own
+        // markers, such as `</think>`.
+        let line = line.split(['<', '|']).next().unwrap_or("");
+        let line = line.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace());
+        let line = line.trim_end_matches('.').trim();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.len() < 2 || !line.chars().any(char::is_alphabetic) {
+            return None;
+        }
+        Some(words.join(" "))
+    }
+
+    /// Whether `b` says what `a` already said: at least half of the longer words of the two
+    /// phrases are shared. "Aerial view of coastal road with waves crashing against rocky shores"
+    /// came back four times in slightly different words for one clip.
+    pub fn same_thing(a: &str, b: &str) -> bool {
+        let words = |s: &str| -> std::collections::BTreeSet<String> {
+            s.split(|c: char| !c.is_alphanumeric()).map(|w| w.to_lowercase()).filter(|w| w.chars().count() > 3).map(|w| w.trim_end_matches('s').to_string()).collect()
+        };
+        let (a, b) = (words(a), words(b));
+        if a.is_empty() || b.is_empty() {
+            return a == b;
+        }
+        let shared = a.intersection(&b).count();
+        shared * 2 >= a.len().max(b.len())
     }
 }
 
@@ -507,8 +593,44 @@ mod tests {
 
     #[test]
     fn grammar_shapes() {
-        assert!(prompt::grammar(ItemKind::Photo).contains(r#"actions ::= "[" ws "]""#));
-        assert!(prompt::grammar(ItemKind::Video).contains("ts      ::="));
-        assert!(prompt::user_text(ItemKind::Video, &[0, 500]).contains("0:00, 0:00.5"));
+        // A video's actions come from the moment calls, so the main reply has none either, and
+        // the grammar leaves no free white space before the [].
+        assert_eq!(prompt::grammar(ItemKind::Video), prompt::grammar(ItemKind::Photo));
+        assert!(prompt::grammar(ItemKind::Video).contains(r#""\"actions\": [],""#));
+        assert!(prompt::user_text(ItemKind::Video, &[0, 500]).starts_with("Video: the 2 images"));
+        assert!(prompt::MOMENT_GRAMMAR.starts_with("root"));
+        assert!(!prompt::MOMENT_TEXT.contains('/') && !prompt::MOMENT_TEXT.contains('\\'));
+    }
+
+    #[test]
+    fn moments_sit_where_the_picture_changes() {
+        use moments::{clean, clock, pick, same_thing};
+        assert!(same_thing("Aerial view of coastal road with waves crashing against rocky shores", "Aerial view of coastal road, ocean waves crashing against rocky shore"));
+        assert!(same_thing("A green lizard perches on a pink flower bud", "A small green lizard perches on a pink flower bud"));
+        assert!(!same_thing("A person stands on rocks by the sea", "Waves crash against rocks creating splashes"));
+        assert!(!same_thing("A man in a white shirt holds a smartphone", "Man with phone moves left out of frame"));
+        assert_eq!(clean("A man takes a photo.</think>A man"), Some("A man takes a photo".to_string()));
+        // Nothing moves: no actions at all. A real locked-off shot of a tree measured 3 to 7.
+        assert!(pick(&[0.0, 3.0, 6.0, 7.0, 5.0]).is_empty());
+        assert!(pick(&[0.0, 1.0, 2.5, 0.4]).is_empty());
+        assert!(pick(&[0.0]).is_empty() && pick(&[]).is_empty());
+        // One event late in a 16-frame clip: the opening and that frame only.
+        let mut c = vec![1.0; 16];
+        c[13] = 30.0;
+        assert_eq!(pick(&c), vec![0, 13]);
+        // Steady movement throughout: the opening and one frame from each quarter.
+        let mut c = vec![12.0; 16];
+        c[2] = 14.0;
+        c[7] = 15.0;
+        c[9] = 13.0;
+        c[15] = 20.0;
+        assert_eq!(pick(&c), vec![0, 2, 7, 9, 15]);
+        // Two frames: the opening and the second.
+        assert_eq!(pick(&[0.0, 9.0]), vec![0, 1]);
+        assert_eq!((clock(0), clock(500), clock(18_260), clock(73_900)), ("0:00".to_string(), "0:01".to_string(), "0:18".to_string(), "1:14".to_string()));
+        assert_eq!(clean(" \"A turtle swims past.\" \nmore"), Some("A turtle swims past".to_string()));
+        assert_eq!(clean("People jog in a park on St. Patrick's Day.\n"), Some("People jog in a park on St. Patrick's Day".to_string()));
+        assert_eq!(clean("Waves."), None);
+        assert_eq!(clean("..."), None);
     }
 }

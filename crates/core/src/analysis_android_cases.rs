@@ -202,25 +202,27 @@ fn rule<'a>(grammar: &'a str, name: &str) -> Option<&'a str> {
 fn grammar_and_prompt_mention_same_keys() {
     let (video, photo) = (prompt::grammar(ItemKind::Video), prompt::grammar(ItemKind::Photo));
     let keys: std::collections::BTreeSet<String> = regex::Regex::new(r#""(\w+)":"#).unwrap().captures_iter(prompt::SYSTEM).map(|c| c[1].to_string()).collect();
-    let expected: std::collections::BTreeSet<String> = ["description", "actions", "t", "text", "tags", "suggested_name", "shot_type"].iter().map(|s| s.to_string()).collect();
+    // Differs from Android on purpose (analysis-v3-cli): the main reply's actions are always [],
+    // for a video too, so the action object's keys `t` and `text` are in neither prompt nor grammar.
+    let expected: std::collections::BTreeSet<String> = ["description", "actions", "tags", "suggested_name", "shot_type"].iter().map(|s| s.to_string()).collect();
     assert_eq!(keys, expected);
     for k in &keys {
         let literal = format!("\\\"{k}\\\":");
         assert!(video.contains(&literal), "the video grammar lacks {k}");
-        // A photo's actions are always [], so the action object's keys never appear.
-        assert_eq!(photo.contains(&literal), k != "t" && k != "text", "the photo grammar and {k}");
+        assert!(photo.contains(&literal), "the photo grammar lacks {k}");
     }
 }
 
 #[test]
 fn grammar_per_kind_actions() {
-    let (video, photo) = (prompt::grammar(ItemKind::Video), prompt::grammar(ItemKind::Photo));
-    assert_eq!(rule(&video, "actions"), Some(r#""[" ws action ( "," ws action ){1,4} ws "]""#));
-    assert_eq!(rule(&video, "action"), Some(r#""{" ws "\"t\":" ws ts "," ws "\"text\":" ws str ws "}""#));
-    assert_eq!(rule(&video, "ts"), Some(r#""\"" [0-9] [0-9]? ":" [0-5] [0-9] "\"""#));
-    assert_eq!(rule(&photo, "actions"), Some(r#""[" ws "]""#));
-    assert_eq!(rule(&photo, "action"), None);
-    assert_eq!(rule(&photo, "ts"), None);
+    // Differs from Android on purpose: Android's video grammar asks for 2-5 actions with m:ss
+    // times. Here the app adds a video's actions from its own moment calls (`analysis::moments`).
+    for grammar in [prompt::grammar(ItemKind::Video), prompt::grammar(ItemKind::Photo)] {
+        assert!(grammar.contains(r#""\"actions\": [],""#));
+        assert_eq!(rule(&grammar, "actions"), None);
+        assert_eq!(rule(&grammar, "action"), None);
+        assert_eq!(rule(&grammar, "ts"), None);
+    }
 }
 
 #[test]
@@ -230,9 +232,9 @@ fn grammar_keeps_shared_rules_verbatim() {
         r#"str     ::= "\"" ( [^"\\\x7F\x00-\x1F] | "\\" ["\\/bfnrt] )* "\"""#,
         r"ws      ::= [ \t\n]*",
         r#"shot    ::= "\"wide\"" | "\"medium\"" | "\"close\"""#,
-        r#"root    ::= "{" ws "\"description\":" ws str "," ws "\"actions\":" ws actions "," ws "\"tags\":" ws strs "," ws "\"suggested_name\":" ws str "," ws "\"shot_type\":" ws shot ws "}""#,
+        r#"root    ::= "{" ws "\"description\":" ws str "," ws "\"actions\": []," ws "\"tags\":" ws strs "," ws "\"suggested_name\":" ws str "," ws "\"shot_type\":" ws shot ws "}""#,
     ];
-    for (grammar, lines) in [(prompt::grammar(ItemKind::Video), 8), (prompt::grammar(ItemKind::Photo), 6)] {
+    for (grammar, lines) in [(prompt::grammar(ItemKind::Video), 5), (prompt::grammar(ItemKind::Photo), 5)] {
         for line in shared {
             assert!(grammar.lines().any(|l| l == line), "missing: {line}");
         }
@@ -245,8 +247,9 @@ fn instructions_and_token_budgets() {
     assert_eq!(prompt::instruction(ItemKind::Photo), "Describe this photo.");
     assert_eq!(prompt::instruction(ItemKind::Video), "Describe this video clip and how it changes over time.");
     assert_eq!((prompt::MAX_TOKENS_PHOTO, prompt::MAX_TOKENS_VIDEO), (400, 520));
-    // Android's version is analysis-v2; the suffix marks that frames go through the command line.
-    assert_eq!(prompt::PROMPT_VERSION, "analysis-v2-cli");
+    // Android's version is analysis-v2. v3 moved a video's actions to the app's own moment calls;
+    // the suffix marks that frames go through GenieX's chat template.
+    assert_eq!(prompt::PROMPT_VERSION, "analysis-v3-cli");
 }
 
 /// Windows only: the command line finds image paths by pattern, so the text beside them must not

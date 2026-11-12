@@ -88,10 +88,13 @@ fn strings_for(body: &str, key: &str) -> Vec<String> {
 
 /// The vision model's reply for `images` attached pictures and the instruction `text`.
 fn vision_reply(images: usize, text: &str) -> String {
+    // The short call about one moment of a clip is answered with a phrase, not JSON.
+    if text.contains("one frame of a video clip") {
+        return format!("Something happens in {images} frame.");
+    }
     let video = text.starts_with("Video:");
-    let actions = if video { "[{\"t\": \"0:00\", \"text\": \"It starts\"}, {\"t\": \"0:02\", \"text\": \"It goes on\"}]" } else { "[]" };
     format!(
-        "{{\"description\": \"A real-looking reply for {images} image(s).\", \"actions\": {actions}, \"tags\": [\"fake\", \"geniex\", \"{}\"], \"suggested_name\": \"{}\", \"shot_type\": \"wide\"}}",
+        "{{\"description\": \"A real-looking reply for {images} image(s).\", \"actions\": [], \"tags\": [\"fake\", \"geniex\", \"{}\"], \"suggested_name\": \"{}\", \"shot_type\": \"wide\"}}",
         if video { "clip" } else { "still" },
         if video { "Fake Clip" } else { "Fake Still" }
     )

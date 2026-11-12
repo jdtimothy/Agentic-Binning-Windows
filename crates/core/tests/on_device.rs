@@ -195,12 +195,20 @@ fn g04_video_frames_get_actions_with_times() {
     assert_eq!(reply.profile.stop_reason, "eos");
     assert!(reply.profile.generated_tokens <= 520, "videos are capped at 520 tokens");
     let result = analysis::parse(&reply.text, ItemKind::Video).expect("the reply is not readable JSON");
-    assert!((2..=5).contains(&result.actions.len()), "a video has 2-5 actions: {:?}", result.actions);
-    let time = regex::Regex::new(r"^\d{1,2}:[0-5]\d$").unwrap();
-    assert!(result.actions.iter().all(|a| time.is_match(&a.t)), "{:?}", result.actions);
-    let words = format!("{} {}", words_of(&result), result.actions.iter().map(|a| a.text.to_lowercase()).collect::<Vec<_>>().join(" "));
-    if !(words.contains("red") && words.contains("blue")) {
-        println!("NOTE: the reply does not mention both red and blue, so the model may be seeing only some of the 8 frames.");
+    assert!(result.actions.is_empty(), "the main reply leaves a video's actions to the moment calls: {:?}", result.actions);
+    // The app picks the moments: the opening, and the frame where the square changes colour.
+    let changes = binning_core::media::frame_changes(&media.image_paths);
+    let picked = analysis::moments::pick(&changes);
+    println!("change per frame: {changes:.0?}  picked: {picked:?}");
+    assert_eq!(picked, vec![0, 4], "the only change is between frames 3 and 4");
+    let mut phrases = Vec::new();
+    for frame in picked {
+        let moment = model.describe_moment(&media.image_paths[frame]).unwrap();
+        println!("{}  {:?}  ({} tokens, {})", analysis::moments::clock(media.frame_times_ms[frame]), moment.text, moment.profile.generated_tokens, moment.profile.stop_reason);
+        phrases.push(analysis::moments::clean(&moment.text).expect("a moment call gave no usable phrase").to_lowercase());
+    }
+    if !(phrases[0].contains("red") && phrases[1].contains("blue")) {
+        println!("NOTE: the phrases do not name red at the opening and blue at the change: {phrases:?}");
     }
 }
 

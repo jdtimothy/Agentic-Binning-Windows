@@ -108,9 +108,33 @@ The owner gave six real clips: 28 to 62 seconds, 1080p and 4K, 24 to 60 frames a
 2. **The window itself, by hand:** the folder and file pickers, dragging files onto the window, the title bar and resizing, keep-awake during a run, and video frames without FFmpeg (take FFmpeg off the PATH, try one H.264 `.mp4` and one HEVC `.mov`). The window's frame reader has still never run. Seen since, in the installed app, with the owner driving and FFmpeg present: the folder picker, 14 real clips (3 s to 73 s) added with thumbnails, the app's own `geniex serve`, all 14 analyzed and sorted in 3 min 35 s (about 15 s a clip, 50 tokens a second), the backdrop, and "All caught up". The status line read "No media yet" while the clips were being added. A 73-second clip got actions at 0:00, 0:04, 0:09, 0:13 and 0:18, which are exactly its first five frame times (item 5).
 3. **Things only a person can cause:** a file open in a video player during Bin Files, a OneDrive folder as the source, sleep during a run.
 4. **The installer puts the program where the app keeps its data.** Both are `%LOCALAPPDATA%\Agentic Binning`: `agentic-binning.exe` and `uninstall.exe` sit beside `settings.json`, `work` and `scratch`. Nothing broke, but what uninstalling does to the settings and project list was not tested. Worth a decision before release.
-5. **Action times of a video** are not spread over the clip (Real video, above). The model sees all the frames; it does not use their times. No prompt layout tried fixes it. Tried since, by hand against the server on two real clips: printing each frame's time into the picture (the model still wrote the first five times in order), and fixing five evenly spread times in the grammar so the model writes only the text (the text then does not match what those frames show). What does work is one short call per key frame, asking what that frame shows, with the app supplying the frame's time: five frames took 5.5 s more per clip and each line matched its frame. That changes the prompt, the number of calls and what an "action" is (a caption of an evenly spaced frame, not a moment the model chose), so it waits for the owner's decision.
+5. **Action times of a video: fixed on the branch `claude/action-times-by-motion`, not merged.** See "Action times by motion" below.
 6. **Speed:** a clip takes 26 to 35 s (frames 4 to 10 s, the model about 21 s at the slower writing speed). The writing speed itself wants measuring again on a cold PC (above).
 7. **Friendly names end in "Photo" or "video"** ("Minimalist Red Square Photo", "Color test pattern video"). The sorting model's choice; the owner may want the prompt to forbid it.
 8. Adding 200 photos took about 35 s (about 6 a second) before analysis began.
 9. The screenshots in `screens/` are from the dev server in a browser, not from the window, and cover Analyze and Project Media in light and dark, plus Settings, the Bin Files sheet and its report in dark only.
 10. The Claude API key store was not touched, and no Claude call was made.
+
+## Action times by motion (branch `claude/action-times-by-motion`)
+
+The owner's earlier project, Agentic Video Binning, measures motion and ties each model call to a few frames from one stretch of a clip, so a time can never be far off. The same idea here, sized for this app:
+
+- The main call writes the description, tags and name. Its `actions` is always `[]`.
+- The app compares each of the clip's frames with the one before (32 px copies, by colour), and picks the opening plus the most-changed frame of each quarter of the clip, if that change is large enough. A clip in which nothing changes gets no actions.
+- One short call per picked frame asks what is happening in it. The action's time is the frame's own.
+- A phrase that says what an earlier one said is dropped, and so is an opening left on its own.
+
+What was seen on real GenieX while building it:
+
+| Seen | What was done |
+| --- | --- |
+| Two of six busy promo reels failed with "The model's reply was cut off": after `"actions":` the model wrote blank space up to the 520-token limit, because the grammar allowed white space before `[` | `"actions": []` is fixed text in the grammar. Both clips then took 7 to 9 s |
+| A phrase grammar ending at a line break: the model never wrote one, ran to the token limit and repeated itself with markers such as `</think>` | The phrase ends at its first full stop |
+| Given the frame before the moment as well, the model described that one (`g04`: "a red square" at the moment the square turned blue) | The call gets the one frame at the moment |
+| Given the clip's description for context, the model repeated the description's ending for a frame half a second in | No context is sent |
+| Comparing frames by brightness missed a red square turning blue | Frames are compared by colour |
+| A locked-off or gently hand-held shot of something still measured under 8 and got the same phrase for every moment | 8 is the level below which nothing happened |
+
+On the owner's 14 real clips (3 s to 73 s, H.264, HEVC and APV, 4K): all analyzed, none failed, actions spread over each clip (a 73-second clip: 0:00, 0:41, 1:08), 5 still or steadily moving clips with no actions. Analysis took about 200 s for the 14, against about 215 s before the change: the main call is shorter without the actions (6.9 s on average, was about 10 s) and the short calls take 0.5 to 0.9 s each. `g01` to `g10` pass with the new prompt (`analysis-v3-cli`).
+
+Not good yet: a phrase is only as right as the model's reading of one frame (it called bread being broken "peeling a potato"), and "St. Patrick's Day" is cut at "St". One clip of the 14 has every other frame black in the file itself; the owner said to ignore it. In one of three runs the sorting model gave six clips each other's names; not reproduced, not looked into.

@@ -33,6 +33,11 @@ pub trait VisionModel: Send + Sync {
     /// Single-turn analysis of `media`; `on_token` receives each piece of the reply as it streams.
     /// A cancelled call returns with stop reason `user`.
     fn generate(&self, media: &PreparedMedia, on_token: &mut dyn FnMut(&str)) -> Result<VisionReply, VisionError>;
+    /// One short phrase saying what happens in `image`, the frame at one moment of a clip. An
+    /// empty text means no action for the moment. A cancelled call returns with stop reason `user`.
+    fn describe_moment(&self, _image: &str) -> Result<VisionReply, VisionError> {
+        Ok(VisionReply { text: String::new(), profile: Profile::default() })
+    }
     /// Asks a running `generate` to stop early. Callable from any thread.
     fn cancel(&self);
     /// The terminal command behind the last call, for the activity log.
@@ -197,17 +202,8 @@ impl VisionModel for MockVisionModel {
         let started = Instant::now();
         let first = media.image_paths.first().ok_or_else(|| VisionError("No image to read".into()))?;
         let (look, shot) = look_of(first);
-        let last = media.image_paths.last().map(|p| look_of(p).0);
-        let actions: Vec<Value> = if media.kind == ItemKind::Video {
-            let end = media.frame_times_ms.last().copied().unwrap_or(0);
-            let clock = |ms: i64| format!("{}:{:02}", ms / 60000, (ms / 1000) % 60);
-            vec![
-                serde_json::json!({"t": "0:00", "text": format!("The clip opens on {}", look.setting)}),
-                serde_json::json!({"t": clock(end), "text": format!("It ends on {}", last.as_ref().map(|l| l.setting).unwrap_or(look.setting))}),
-            ]
-        } else {
-            Vec::new()
-        };
+        // As with the real model, a video's actions come from `describe_moment`.
+        let actions: Vec<Value> = Vec::new();
         let what = if media.kind == ItemKind::Video { "video clip" } else { "photo" };
         let reply = serde_json::json!({
             "description": format!("Simulated analysis: a {what} showing {}. GenieX is not installed, so this text comes from the picture's colours, not from a vision model.", look.setting),
@@ -238,6 +234,13 @@ impl VisionModel for MockVisionModel {
             text: sent,
             profile: Profile { stop_reason: "eos".into(), ttft_ms: 40.0, prompt_tokens: 256 * media.image_paths.len() as i64 + 180, generated_tokens: tokens, decoding_speed: tokens as f64 / secs },
         })
+    }
+    fn describe_moment(&self, image: &str) -> Result<VisionReply, VisionError> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Ok(VisionReply { text: String::new(), profile: Profile { stop_reason: "user".into(), ..Default::default() } });
+        }
+        let text = format!("Simulated: the picture shows {}.", look_of(image).0.setting);
+        Ok(VisionReply { text, profile: Profile { stop_reason: "eos".into(), generated_tokens: 12, ..Default::default() } })
     }
     fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
@@ -351,7 +354,9 @@ mod tests {
         assert_eq!(streamed, reply.text);
         let r = analysis::parse(&reply.text, ItemKind::Video).unwrap();
         assert_eq!(r.suggested_name, "Ocean and sky");
-        assert_eq!(r.actions[1].t, "1:01");
+        assert!(r.actions.is_empty());
+        let moment = m.describe_moment(&media.image_paths[1]).unwrap();
+        assert_eq!(analysis::moments::clean(&moment.text).unwrap(), "Simulated: the picture shows open water under a wide sky");
         assert!(r.tags.contains(&"simulated".to_string()));
     }
 
