@@ -20,6 +20,8 @@ const MAX_DECODE_EDGE: u32 = 1536;
 const THUMB_EDGE: u32 = 512;
 const IMAGE_QUALITY: u8 = 90;
 const THUMB_QUALITY: u8 = 85;
+/// Frames one FFmpeg run cuts from a clip.
+const FRAMES_PER_RUN: usize = 16;
 
 /// The media kind of a file judged by its extension, or None if it is not a supported type.
 pub fn kind_of(path: &str) -> Option<ItemKind> {
@@ -460,12 +462,12 @@ impl MediaPreparer {
         let duration = duration_ms.filter(|d| *d > 0).or_else(|| probe_video(path, &self.ffmpeg).and_then(|m| m.duration_ms)).unwrap_or(0);
         let times = timing::sample_times_ms(duration, max_frames);
         let pad = format!("scale=w={edge}:h={edge}:force_original_aspect_ratio=decrease,pad={edge}:{edge}:(ow-iw)/2:(oh-ih)/2:black");
-        let mut out = Vec::new();
-        for t in &times {
-            let file = format!("{dir}/f_{t}.jpg");
+        let file_for = |t: i64| format!("{dir}/f_{t}.jpg");
+        let cut = |t: i64| -> bool {
+            let file = file_for(t);
             // -ss before -i with re-encoding decodes up to the exact frame, not the nearest keyframe.
             let ok = quiet_command(ffmpeg)
-                .args(["-v", "error", "-y", "-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"])
+                .args(["-v", "error", "-y", "-ss", &format!("{:.3}", t as f64 / 1000.0), "-i"])
                 .arg(path)
                 .args(["-frames:v", "1", "-q:v", "3", "-vf", &pad])
                 .arg(&file)
@@ -476,13 +478,62 @@ impl MediaPreparer {
                 .unwrap_or(false);
             if !ok || !Path::new(&file).is_file() || crate::files::size(&file) == 0 {
                 let _ = std::fs::remove_file(&file);
-                continue;
+                return false;
             }
-            if out.is_empty() && !video_thumbnail(ffmpeg, path, *t, thumb) {
+            true
+        };
+        // One FFmpeg run cuts a batch of frames: the clip is opened once per frame inside it, each
+        // with its own seek, so every frame is the one a run of its own would give. A run per frame
+        // spent most of its time starting FFmpeg (1.3 s each for an x64 build on an ARM PC: over
+        // 20 s for 16 frames, more than the model then needs). The batch size keeps the command
+        // line well under what Windows allows.
+        let written = |upto: usize| times[..upto].iter().filter(|t| crate::files::size(&file_for(**t)) > 0).count();
+        let mut reported = 0;
+        for (batch, chunk) in times.chunks(FRAMES_PER_RUN).enumerate() {
+            let mut cmd = quiet_command(ffmpeg);
+            cmd.args(["-v", "error", "-y"]);
+            for t in chunk {
+                cmd.args(["-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"]).arg(path);
+            }
+            for (i, t) in chunk.iter().enumerate() {
+                cmd.args(["-map", &format!("{i}:v:0"), "-frames:v", "1", "-q:v", "3", "-vf", &pad]).arg(file_for(*t));
+            }
+            let before = batch * FRAMES_PER_RUN;
+            if let Ok(mut child) = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+                // The frames appear as files while it runs; that is the progress.
+                loop {
+                    let done = matches!(child.try_wait(), Ok(Some(_)) | Err(_));
+                    let now = written(before + chunk.len());
+                    if now > reported && !done {
+                        reported = now;
+                        on_frame(reported, times.len());
+                    }
+                    if done {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        // What the batch left out (a seek past the end fails the whole run) is cut frame by frame.
+        let mut out = Vec::new();
+        for t in &times {
+            let file = file_for(*t);
+            if crate::files::size(&file) > 0 || cut(*t) {
+                out.push((file, *t));
+                if out.len() > reported {
+                    reported = out.len();
+                    on_frame(reported, times.len());
+                }
+            } else {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+        // The thumbnail is the first frame; one written while the clip waited is that same frame.
+        if let Some((_, first)) = out.first() {
+            if !Path::new(thumb).is_file() && !video_thumbnail(ffmpeg, path, *first, thumb) {
                 return Err(PrepareError::WorkFile(format!("Cannot write {thumb}")));
             }
-            out.push((file, *t));
-            on_frame(out.len(), times.len());
         }
         Ok(out)
     }
