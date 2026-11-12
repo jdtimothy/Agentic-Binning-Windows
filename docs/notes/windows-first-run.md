@@ -4,7 +4,7 @@
 
 ## Result
 
-The app's core works on this PC with real GenieX. Every automated and on-device test that could run here passed. Two bugs were found and fixed. Not done: file moves between two drives and on exFAT (this PC has one drive), and the checks that need the app's own window driven by hand.
+The app's core works on this PC with real GenieX. Every automated and on-device test passed, including the moves between two drives once the owner attached an exFAT drive. Not done: a second NTFS drive, and the checks that need the app's own window driven by hand.
 
 ## The PC and tools
 
@@ -38,7 +38,7 @@ The app's core works on this PC with real GenieX. Every automated and on-device 
 | `g08` | Passed, with the NOTE: the first reply used tag lists such as `turtle,beach,sand` as category names, so the app would ask again (`output/g08.txt`). The ids were right |
 | `g09` | Passed. The grammar with existing category names was accepted |
 | `g10` | Passed. 7 added, 6 analyzed and sorted and binned, `broken.jpg` Failed, every hash matched. 116 s |
-| `m01`, `m02`, `m03` | **Skipped: this PC has only drive C:.** Not counted as passed |
+| `m01`, `m02`, `m03` | Skipped at first (one drive). Passed later the same day with `AB_OTHER_DRIVE` on the owner's exFAT drive D: (931 GB, 56 GB free): both directions copy, check, place and delete each file, the folder check is OK, and a rename on exFAT refuses to replace a file (`output/moves-exfat.txt`). A second NTFS drive is still untested |
 
 ### g07: where the time goes
 
@@ -74,6 +74,16 @@ A debug build takes about 7 s a photo of that size, nearly all of it decoding th
 
 Also checked: the server stops when the app closes; it ends with the app when the app is ended from outside (a Windows job object; seen when the dev server and the test program were ended without a clean close); a settings change while nothing runs stops it; Stop returns at once and the next call works (`g06`).
 
+### Real video
+
+The owner gave six real clips: 28 to 62 seconds, 1080p and 4K, 24 to 60 frames a second, five H.264 `.mp4` (up to 94 Mbit/s) and one HEVC `.m4v`. Copies were analyzed in the dev server, through `geniex serve`; the originals were only read, and their hashes were the same afterwards.
+
+- **All six were analyzed and sorted**, the HEVC one too. The descriptions name what is in the clips, including scenes from late in them, so the model is given frames from the whole clip.
+- **The action times are wrong.** A 62-second clip gets actions at 0:00, 0:03, 0:07, 0:11 and 0:15: the model labels the moments it picks with the first few timestamps of the list. Tried by hand against the server, with the app's grammar, on two clips: the list as now, Android's layout (a `[0m5.00s]` stamp between frames every 5 s), the list with a sentence asking for the whole clip, and whole-second times. None spread the times over the clip, Android's layout included, so the prompt was left as it is. The grammar also only allows `m:ss` while the listed times have tenths (`0:01.9`).
+- **Where a clip's time went:** about 20 s cutting 16 frames, one FFmpeg run per frame. The FFmpeg winget installs (`Gyan.FFmpeg`) is an x64 program, emulated on this PC, and takes 1.3 s only to start. One run that opens the clip once per frame cuts the same frames (same bytes) in 5 s for 1080p and 10 to 12 s for 4K. That is now what the app does. An ARM64 build of FFmpeg would be faster still; not installed, because it is not the build the brief names.
+- **The model's part:** about 12 s reading 16 frames and about 9 s writing some 300 tokens.
+- **Writing speed dropped during the afternoon** from 68 to 70 tokens a second to 31 to 42, for photos as well. A newly started `geniex serve`, asked about one photo with no grammar and any reply length, gave the same 42, and naming the power mode (`burst`, `high_performance`) changed nothing. So it is the PC's state after about an hour of load, not the app; the PC was on mains power on the Balanced plan, and its temperature could not be read. Worth measuring again on a cold start.
+
 ## By hand
 
 - **Dev server, real models.** Settings shows the version, the path and both models. A project from a folder of 9 generated files: 7 analyzed and sorted into 4 categories, `empty.mp4` and `still_truncated.jpg` Failed with "Couldn't read this file", status line went Describing, Encoding frames, All caught up. An H.264 `.mp4` and an HEVC `.mov` both analyzed, with FFmpeg cutting the frames.
@@ -90,15 +100,16 @@ Also checked: the server stops when the app closes; it ends with the app when th
 | `605a7f4` | `drives_the_geniex_command_line` runs on Windows too: the stand-in for GenieX is now a small Rust program instead of a Python script |
 | `2627069` | One `geniex serve` is kept running, so the model is loaded once per run instead of for every file (above) |
 | `8e341f8` | Cards of files that wait to be analyzed were blank until the model reached them (the owner saw this while testing). A background thread now writes their thumbnails as soon as files are added, in the order they will be analyzed: 22 files had theirs about 3 s after they were added. A video without FFmpeg still gets its thumbnail with its analysis |
+| this commit and the two before it | Seen by the owner while testing real clips. The scan line started again from the top every time a video frame was read, because the card is redrawn; it now takes its place in the sweep from the clock. A clip's frames are cut in one FFmpeg run instead of one per frame (above). The Analyze screen has the Android app's backdrop: the picture in view, shrunk to 20 px and blurred, stretched over the window, fading into the next over 2.3 s and drifting while items are analyzed (`ThumbnailBackdrop.kt` is the reference) |
 
 ## Still open
 
-1. **Two drives and exFAT** (`m01` to `m03`): needs a second NTFS drive and an exFAT stick. `$env:AB_OTHER_DRIVE = "D:\ab-test"`, then the command in the brief.
+1. **A second NTFS drive** (`m01` to `m03` passed on exFAT only): `$env:AB_OTHER_DRIVE = "E:\ab-test"`, then the command in the brief.
 2. **The window itself, by hand:** the folder and file pickers, dragging files onto the window, the title bar and resizing, keep-awake during a run, and video frames without FFmpeg (take FFmpeg off the PATH, try one H.264 `.mp4` and one HEVC `.mov`). The window's frame reader has still never run.
 3. **Things only a person can cause:** a file open in a video player during Bin Files, a OneDrive folder as the source, sleep during a run.
 4. **The installer puts the program where the app keeps its data.** Both are `%LOCALAPPDATA%\Agentic Binning`: `agentic-binning.exe` and `uninstall.exe` sit beside `settings.json`, `work` and `scratch`. Nothing broke, but what uninstalling does to the settings and project list was not tested. Worth a decision before release.
-5. **`g04`'s note:** find out whether the model is given all frames of a clip. In the dev server the two test clips got sensible descriptions, but both were short.
-6. **Speed:** photos are settled by `geniex serve` (above). A clip still takes about 26 s; where that goes (cutting frames or the model reading 16 of them) is not measured. With the server, frame times could sit next to their frames as on Android instead of in a list; not done, because it changes the prompt.
+5. **Action times of a video** are not spread over the clip (Real video, above). The model sees all the frames; it does not use their times. No prompt layout tried fixes it, so this needs a different idea, for example asking for frame numbers and letting the app fill in the times.
+6. **Speed:** a clip takes 26 to 35 s (frames 4 to 10 s, the model about 21 s at the slower writing speed). The writing speed itself wants measuring again on a cold PC (above).
 7. **Friendly names end in "Photo" or "video"** ("Minimalist Red Square Photo", "Color test pattern video"). The sorting model's choice; the owner may want the prompt to forbid it.
 8. Adding 200 photos took about 35 s (about 6 a second) before analysis began.
 9. The screenshots in `screens/` are from the dev server in a browser, not from the window, and cover Analyze and Project Media in light and dark, plus Settings, the Bin Files sheet and its report in dark only.
