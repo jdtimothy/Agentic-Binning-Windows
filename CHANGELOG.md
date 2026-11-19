@@ -4,7 +4,9 @@ All notable changes to Agentic Binning for Windows are listed here. The project
 uses [Semantic Versioning](https://semver.org/). Version numbers follow the
 Android app's where the features match.
 
-## [1.0.1] — unreleased
+## [Unreleased]
+
+## [1.0.1] — 2026-11-18
 
 First Windows version, at feature parity with Agentic Binning for Android 1.0.1.
 Built and tested on Linux and on GitHub's Windows ARM64 machine with a simulated

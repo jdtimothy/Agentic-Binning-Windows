@@ -91,6 +91,12 @@ tauri build                         # the installer lands in target\release\bund
 
 `tauri dev` runs the app without packaging it. Every push also builds the installer on GitHub's Windows ARM64 runner; it is attached to the workflow run as an artifact.
 
+### Releasing a version
+
+1. On a branch, set the version in `Cargo.toml` and `src-tauri/tauri.conf.json` (numbers follow the Android app's where the features match), and give the changelog's `[Unreleased]` entries their version and date. Merge it by pull request.
+2. Tag that commit on `main` and push the tag: `git tag v1.0.1` then `git push origin v1.0.1`.
+3. The Build workflow builds the installer from the tag and attaches it to a GitHub release of the same name.
+
 ### Working on the interface without Windows
 
 ```bash
