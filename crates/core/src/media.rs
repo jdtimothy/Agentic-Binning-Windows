@@ -85,7 +85,8 @@ pub fn quiet_command(program: &str) -> Command {
     cmd
 }
 
-/// Looks for a program: the configured path first, then beside the app, then the PATH.
+/// Looks for a program: the configured path first, then beside the app, then the PATH, then the
+/// PATH as the registry holds it now (a program installed after the app started).
 pub fn find_program(name: &str, configured: Option<&str>, extra_dirs: &[PathBuf]) -> Option<String> {
     if let Some(c) = configured.map(str::trim).filter(|c| !c.is_empty()) {
         if Path::new(c).is_file() {
@@ -103,6 +104,14 @@ pub fn find_program(name: &str, configured: Option<&str>, extra_dirs: &[PathBuf]
         dirs.extend(std::env::split_paths(&path));
     }
     for d in dirs {
+        for ext in exts {
+            let candidate = d.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+    }
+    for d in crate::install::registry_path_dirs() {
         for ext in exts {
             let candidate = d.join(format!("{name}{ext}"));
             if candidate.is_file() {

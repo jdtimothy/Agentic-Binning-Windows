@@ -23,6 +23,10 @@ and frame reader are not yet checked there.
   category rename and merge, the failed-item sheet.
 - Bin Files with the folder check, checked copies, pause, stop, resume after a
   crash, and the report.
-- A simulated model when GenieX is not installed, clearly labelled.
+- GenieX is the only model the app uses; the simulated one is for tests and the
+  browser devserver (`--simulated`). When GenieX or FFmpeg is missing, Settings
+  says so and offers to install it with winget, only when you press Install.
+- Thumbnails for clips copied in from another project while they wait.
+- A new app icon.
 - About 430 automated tests, most of them the Android app's own cases, plus
   tests for real GenieX and a second drive that are run by hand.

@@ -14,7 +14,7 @@ use crate::names::clean_name;
 use crate::paths::{self, norm};
 use crate::pipeline::{self, failure, MoveJob, Phase, Pipeline, PipelineState, RunEnv, SortChoice};
 use crate::projects::{self, HeldFile, Placement, ProjectRef, ProjectRegistry, RemovedProject};
-use crate::settings::{ApiKeyStore, AppSettings, Backend, SettingsStore};
+use crate::settings::{ApiKeyStore, AppSettings, SettingsStore};
 use crate::sorting::validator;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,11 @@ pub struct App {
     log: Arc<Mutex<VecDeque<String>>>,
     /// Pause between the simulated model's pieces of text (zero in tests).
     pub mock_delay: Mutex<Duration>,
+    /// The simulated models stand in for GenieX. Only tests and the browser devserver turn this
+    /// on; the app itself always uses GenieX, and says so when it isn't installed.
+    simulated_models: AtomicBool,
+    /// `winget install` is running for GenieX or FFmpeg (the package id).
+    installing: Mutex<Option<String>>,
 }
 
 const LOG_LINES: usize = 400;
@@ -370,6 +375,8 @@ impl App {
             grabber: Mutex::new(None),
             log: Arc::new(Mutex::new(VecDeque::new())),
             mock_delay: Mutex::new(Duration::from_millis(18)),
+            simulated_models: AtomicBool::new(false),
+            installing: Mutex::new(None),
         });
         app.refresh_genie();
         app
@@ -409,11 +416,13 @@ impl App {
 
     /// Whether the simulated models stand in for GenieX.
     pub fn simulated(&self) -> bool {
-        match self.settings().backend {
-            Backend::Simulated => true,
-            Backend::GenieX => false,
-            Backend::Auto => self.genie.lock().path.is_none(),
-        }
+        self.simulated_models.load(Ordering::SeqCst)
+    }
+
+    /// For tests and the browser devserver only: analyze and sort with the simulated models,
+    /// whose output always says it is simulated, instead of GenieX.
+    pub fn use_simulated_models(&self, on: bool) {
+        self.simulated_models.store(on, Ordering::SeqCst);
     }
 
     fn ffmpeg(&self) -> Ffmpeg {
@@ -543,7 +552,7 @@ impl App {
                 return Ok(());
             }
             let status = geniex::status(Some(&geniex_path));
-            let Some(program) = status.path else { return Err("GenieX isn't installed".into()) };
+            let Some(program) = status.path else { return Err(failure::GENIEX_MISSING.into()) };
             if status.vision_ready || status.error.is_some() {
                 // With an unreadable list the run goes ahead: `geniex infer` says what is wrong.
                 return Ok(());
@@ -993,6 +1002,8 @@ impl App {
             "projectsRoot": paths::display(&self.registry.projects_root),
             "models": {"vision": LFM3_VL_2B, "text": LFM3_1_7B},
             "pulling": self.pulling.lock().clone(),
+            "installing": self.installing.lock().clone(),
+            "canInstall": crate::install::winget().is_some(),
             "frameCaps": crate::settings::FRAME_CAP_OPTIONS,
             "frameCapHint": crate::analysis::budget::hint(self.settings().max_frames_per_clip),
             "windows": cfg!(windows),
@@ -1021,6 +1032,41 @@ impl App {
             (app.emit)("pull", json!({"model": spec.id, "finished": true, "error": result.err()}));
         });
         Ok(json!({"ok": true}))
+    }
+
+    /// Installs GenieX or FFmpeg with winget on a background thread, after the person pressed
+    /// Install in Settings. Its lines go to the activity log; `install` events tell the window.
+    fn install(self: &Arc<Self>, package: crate::install::Package) -> Result<Value> {
+        {
+            let mut installing = self.installing.lock();
+            if installing.is_some() {
+                return Err(Error::msg("An install is already running"));
+            }
+            *installing = Some(package.name.to_string());
+        }
+        let app = self.clone();
+        std::thread::spawn(move || {
+            let emit = app.emit.clone();
+            app.note(&format!("Installing {}", package.name));
+            let result = crate::install::run(&package, &|line| {
+                app.note(line);
+                emit("install", json!({"what": package.name, "line": line}));
+            });
+            *app.installing.lock() = None;
+            app.refresh_genie();
+            let found = if package == crate::install::GENIEX { app.genie.lock().path.is_some() } else { app.ffmpeg().ffmpeg.is_some() };
+            let error = match result {
+                Ok(()) if found => None,
+                Ok(()) => Some(format!("winget finished, but the app can't find {} yet. Restart the app, or set its path below", package.name)),
+                Err(e) => Some(e),
+            };
+            app.note(&match &error {
+                None => format!("{} is installed", package.name),
+                Some(e) => format!("Installing {} failed: {e}", package.name),
+            });
+            (app.emit)("install", json!({"what": package.name, "finished": true, "error": error}));
+        });
+        Ok(self.boot())
     }
 
     /// Answers one command from the window. Every command and its arguments are listed here.
@@ -1408,6 +1454,15 @@ impl App {
                 let a: A = arg(args)?;
                 let spec = if a.model == LFM3_1_7B.id { LFM3_1_7B } else { LFM3_VL_2B };
                 self.pull_model(spec)
+            }
+            "install" => {
+                #[derive(Deserialize)]
+                struct A {
+                    what: String,
+                }
+                let a: A = arg(args)?;
+                let package = crate::install::package(&a.what).ok_or_else(|| Error::msg(format!("Nothing called {} can be installed", a.what)))?;
+                self.install(package)
             }
             "genie.cancelPull" => {
                 self.pull_cancel.store(true, Ordering::SeqCst);

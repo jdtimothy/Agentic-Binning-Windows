@@ -109,7 +109,7 @@ function renderChrome() {
   top.replaceChildren(
     h('button.pill', { title: 'Models and settings', onclick: () => sheets.settings() },
       icon('chip'),
-      h('span.two', h('b', b.simulated ? 'Simulated' : b.models.vision.displayName), h('span', b.simulated ? 'GenieX not in use' : b.pulling === b.models.vision.id ? 'Downloading' : b.genie.visionReady || b.genie.error ? b.settings.compute.toUpperCase() : 'Not downloaded'))),
+      h('span.two', h('b', b.simulated ? 'Simulated' : b.models.vision.displayName), h('span', b.simulated ? 'GenieX not in use' : !b.genie.path ? 'GenieX not installed' : b.pulling === b.models.vision.id ? 'Downloading' : b.genie.visionReady || b.genie.error ? b.settings.compute.toUpperCase() : 'Not downloaded'))),
     h('button.pill.grow', { title: cur ? 'Add media or switch project' : 'Open projects', onclick: () => (cur || S.boot.projects.projects.length ? sheets.projects() : sheets.newProject()) },
       icon('folder'),
       h('span.name', cur ? cur.name : 'Create project'),
@@ -722,6 +722,7 @@ async function start() {
   });
   api.on('copy', (r) => { sheets.onCopy(r); if (r.finished) refreshSoon(0); });
   api.on('pull', (r) => sheets.onPull(r));
+  api.on('install', (r) => sheets.onInstall(r));
   api.on('drop', onDrop);
   api.on('dragging', (on) => $('drop').classList.toggle('on', !!on));
   api.on('grab', (req) => sheets.grabFrames(req));

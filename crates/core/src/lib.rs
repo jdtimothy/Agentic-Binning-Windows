@@ -8,6 +8,7 @@ pub mod error;
 pub mod files;
 pub mod geniex;
 pub mod geniex_serve;
+pub mod install;
 pub mod media;
 pub mod models;
 pub mod moves;

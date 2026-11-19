@@ -378,7 +378,7 @@ fn g10_the_app_analyzes_sorts_and_bins_a_small_project() {
     let app = App::new(std::path::PathBuf::from(format!("{root}/data")), format!("{root}/Projects"), Arc::new(|_, _| {}));
     let call = |cmd: &str, args: Value| app.dispatch(cmd, &args).unwrap_or_else(|e| panic!("{cmd} failed: {e}"));
     // The sorting model is named outright, so this test can never make a paid Claude call.
-    let boot = call("settings.set", json!({"backend": "GenieX", "geniexPath": program(), "compute": compute(), "sortingModel": "Lfm3_1_7B"}));
+    let boot = call("settings.set", json!({"geniexPath": program(), "compute": compute(), "sortingModel": "Lfm3_1_7B"}));
     assert_eq!(boot["simulated"], false, "the app fell back to the simulated model: {}", boot["genie"]);
     assert_eq!(boot["settings"]["sortingModel"], "Lfm3_1_7B");
     for (i, rgb) in [[220, 20, 20], [230, 40, 30], [20, 40, 220], [30, 60, 210], [20, 160, 40], [240, 200, 30]].into_iter().enumerate() {

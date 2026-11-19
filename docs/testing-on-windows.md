@@ -5,7 +5,7 @@ This app was written and tested on Linux with a simulated model. This page is th
 ## 1. Does it build and start
 
 1. Take the installer from the latest run of the **Build** workflow on GitHub (artifact `agentic-binning-windows-arm64`), or run `tauri build` in `src-tauri`.
-2. Start the app. The top-left chip should read **LFM3-VL-2B / NPU**. If it reads **Simulated**, GenieX was not found: open Settings, press **Check again**, or set the path to `geniex.exe`.
+2. Start the app. The top-left chip should read **LFM3-VL-2B / NPU**. If it reads **GenieX not installed**, GenieX was not found: open Settings, press **Install GenieX** or **Check again**, or set the path to `geniex.exe`.
 3. Settings → GenieX should show the version, its path, and whether each model is downloaded.
 
 If the window is blank, run `tauri dev` from `src-tauri` and look at the terminal and at the web view's console (right-click → Inspect in a debug build).

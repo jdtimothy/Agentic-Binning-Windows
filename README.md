@@ -18,15 +18,15 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
 ## What you need
 
 - A PC with a **Snapdragon X Elite or X2 Elite** and Windows 11 on ARM.
-- The **GenieX CLI** installed, with the Qualcomm NPU driver it asks for. The app finds `geniex.exe` on the PATH; if it doesn't, set the path in Settings.
+- The **GenieX CLI**. If it isn't installed, Settings offers an Install button that runs `winget install Qualcomm.GenieX.CLI` once you press it (you can also run that yourself). The app finds `geniex.exe` on the PATH or in `%LOCALAPPDATA%\GenieX CLI`; if it doesn't, set the path in Settings.
 - The models. The app can download them with `geniex pull`, or you can pull them yourself:
   ```powershell
   geniex pull LiquidAI/LFM3-VL-2B-GGUF:Q4_0 --model-type vlm
   geniex pull LiquidAI/LFM3-1.7B-GGUF:Q4_0 --model-type llm
   ```
-- Optional: **FFmpeg** on the PATH (`winget install Gyan.FFmpeg`). With it, video frames are read exactly as on Android, and HEIC and DNG stills work. Without it, the app's own window reads frames from video formats Windows can play.
+- Recommended: **FFmpeg**. Settings offers to install it with `winget install BtbN.FFmpeg.LGPL` (an ARM64 build). With it, video frames are read exactly as on Android, HEIC and DNG stills work, and clips waiting in line get thumbnails. Without it, the app's own window reads frames from video formats Windows can play.
 
-Without GenieX the app still starts. It uses a simulated model, labels everything it writes as simulated, and lets you try every screen, including Bin Files.
+Without GenieX the app still starts and lists what you add, but analysis waits: the top-left chip reads **GenieX not installed** and a run stops with a message pointing to Settings. Nothing is installed until you press Install there, next to the license of what it installs. winget downloads each program from its publisher's own release; nothing is bundled with the app.
 
 ## How it uses GenieX
 
@@ -93,7 +93,7 @@ cargo run -p binning-devserver -- --data /tmp/ab-data --projects /tmp/ab-project
 # then open http://127.0.0.1:4173
 ```
 
-This serves the same interface to a web browser with the real core behind it and the simulated model. Pickers become a prompt for a path. It listens on this computer only.
+This serves the same interface to a web browser with the real core behind it, using GenieX when it is installed. Add `--simulated` to use the simulated model instead (off Windows there is no GenieX). Pickers become a prompt for a path. It listens on this computer only.
 
 ## How the code is laid out
 
