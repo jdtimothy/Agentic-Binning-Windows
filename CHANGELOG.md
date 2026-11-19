@@ -6,9 +6,9 @@ Android app's where the features match.
 
 ## [Unreleased]
 
-## [1.0.1] — 2026-11-18
+## [1.0.3] — 2026-11-19
 
-First Windows version, at feature parity with Agentic Binning for Android 1.0.1.
+First Windows version, at feature parity with Agentic Binning for Android 1.0.3.
 Built and tested on Linux and on GitHub's Windows ARM64 machine with a simulated
 model, then run on a Snapdragon X2 Elite Extreme PC with GenieX CLI v0.10.0
 (`docs/notes/windows-first-run.md`). The window's own pickers, drag and drop
