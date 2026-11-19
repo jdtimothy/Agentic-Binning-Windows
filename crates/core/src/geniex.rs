@@ -92,7 +92,8 @@ pub fn locate(configured: Option<&str>) -> Option<String> {
     for var in ["LOCALAPPDATA", "ProgramFiles", "USERPROFILE"] {
         if let Some(base) = std::env::var_os(var) {
             let base = PathBuf::from(base);
-            for sub in ["geniex", "GenieX", "Programs/geniex", "Programs/GenieX", ".geniex/bin", "geniex/bin", "GenieX/bin"] {
+            // "GenieX CLI" is where its installer (and `winget install Qualcomm.GenieX.CLI`) puts it.
+            for sub in ["GenieX CLI", "geniex", "GenieX", "Programs/geniex", "Programs/GenieX", ".geniex/bin", "geniex/bin", "GenieX/bin"] {
                 extra.push(base.join(sub));
             }
         }

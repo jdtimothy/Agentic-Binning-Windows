@@ -12,16 +12,6 @@ pub enum ThemeMode {
     Light,
 }
 
-/// Which backend analyzes and sorts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Backend {
-    /// GenieX when it is installed, otherwise the simulated models.
-    #[default]
-    Auto,
-    GenieX,
-    Simulated,
-}
-
 /// The frame counts a clip may be capped at.
 pub const FRAME_CAP_OPTIONS: [u32; 5] = [16, 24, 32, 48, 64];
 
@@ -70,8 +60,6 @@ pub struct AppSettings {
     /// True once the user picked a sorting model themselves; saving a key then no longer changes it.
     #[serde(default)]
     pub sorting_model_chosen_by_user: bool,
-    #[serde(default, deserialize_with = "or_default")]
-    pub backend: Backend,
     /// Where `geniex` is, when it is not on the PATH.
     #[serde(default)]
     pub geniex_path: String,
@@ -214,7 +202,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(d.path().join("settings.json"));
         let s = store.load();
-        assert_eq!((s.sorting_model, s.max_frames_per_clip, s.compute.as_str(), s.backend), (SortChoice::Lfm3, 16, "npu", Backend::Auto));
+        assert_eq!((s.sorting_model, s.max_frames_per_clip, s.compute.as_str()), (SortChoice::Lfm3, 16, "npu"));
         let mut changed = s.clone();
         changed.max_frames_per_clip = 30;
         changed.sorting_model = SortChoice::Claude;
@@ -289,7 +277,8 @@ mod tests {
         let (d, store) = store();
         std::fs::write(d.path().join("settings.json"), r#"{"sortingModel":"Qwen3_4B","themeMode":"Sepia","backend":"Cloud","maxFramesPerClip":48,"keepAwake":true,"compute":"quantum"}"#).unwrap();
         let s = store.load();
-        assert_eq!((s.sorting_model, s.theme_mode, s.backend), (SortChoice::Lfm3, ThemeMode::System, Backend::Auto));
+        // "backend" was a setting until GenieX became the only model; a stored one is ignored.
+        assert_eq!((s.sorting_model, s.theme_mode), (SortChoice::Lfm3, ThemeMode::System));
         assert_eq!((s.max_frames_per_clip, s.keep_awake, s.compute.as_str()), (48, true, "npu"));
         // A value of the wrong kind too.
         std::fs::write(d.path().join("settings.json"), r#"{"sortingModel":7,"themeMode":"Dark"}"#).unwrap();

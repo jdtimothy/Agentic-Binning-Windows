@@ -1,5 +1,5 @@
 //! The models behind analysis and sorting: what they must do, and the simulated ones used when
-//! GenieX is not installed. The real backends are in [`crate::geniex`] and [`crate::claude`].
+//! tests and the browser devserver ask for them. The real backends are in [`crate::geniex`] and [`crate::claude`].
 
 use crate::analysis::{prompt, ItemKind};
 use crate::db::Profile;

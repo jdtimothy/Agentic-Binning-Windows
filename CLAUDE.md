@@ -22,7 +22,7 @@ A first session on a real Snapdragon X PC starts with `docs/windows-agent-brief.
 cargo test -p binning-core                 # unit and end-to-end tests (simulated model)
 cargo test -p binning-core --test on_device -- --ignored --nocapture --test-threads=1   # real GenieX, a second drive
 cargo build -p agentic-binning             # the shell; on Linux needs libwebkit2gtk-4.1-dev
-cargo run -p binning-devserver -- --data /tmp/ab-data --projects /tmp/ab-projects
+cargo run -p binning-devserver -- --data /tmp/ab-data --projects /tmp/ab-projects --simulated   # without --simulated it uses GenieX
 ```
 
 Tests live beside their module. Files named `*_android_cases.rs` are the Android

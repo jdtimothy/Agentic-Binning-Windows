@@ -1,7 +1,7 @@
 //! The file system as the move engine sees it. Nothing here ever replaces an existing file.
 
 use crate::paths;
-use sha2::{Digest, Sha256};
+use ring::digest::{Context, SHA256};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -185,6 +185,14 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A SHA-256 in progress. `ring` asks Windows whether the processor has the ARMv8 hashing
+/// instructions and uses them: on a Snapdragon X about 1,200 MB/s against the `sha2` crate's
+/// 520, which can't detect them on Windows and so always hashes in software. Measured on a
+/// 1.2 GB clip, Nov 2026. Hashing, not reading, was what made copying a large clip slow.
+fn hasher() -> Context {
+    Context::new(&SHA256)
+}
+
 /// Copies `from` to the new file `to` and returns the SHA-256 of the bytes read from `from`.
 /// Fails if `to` exists. The copy is flushed to storage before returning, so the check that
 /// follows reads what a reboot would.
@@ -196,7 +204,7 @@ pub fn copy_hashing(from: &str, to: &str) -> io::Result<String> {
         output.write_all(b"half")?;
         return Err(io::Error::from(io::ErrorKind::StorageFull));
     }
-    let mut digest = Sha256::new();
+    let mut digest = hasher();
     let mut buf = vec![0u8; BUFFER];
     loop {
         let n = input.read(&mut buf)?;
@@ -212,13 +220,13 @@ pub fn copy_hashing(from: &str, to: &str) -> io::Result<String> {
     }
     output.flush()?;
     output.sync_all()?;
-    Ok(hex(&digest.finalize()))
+    Ok(hex(digest.finish().as_ref()))
 }
 
 /// SHA-256 of the file's bytes as lowercase hex.
 pub fn sha256(path: &str) -> io::Result<String> {
     let mut input = File::open(path)?;
-    let mut digest = Sha256::new();
+    let mut digest = hasher();
     let mut buf = vec![0u8; BUFFER];
     loop {
         let n = input.read(&mut buf)?;
@@ -227,7 +235,7 @@ pub fn sha256(path: &str) -> io::Result<String> {
         }
         digest.update(&buf[..n]);
     }
-    Ok(hex(&digest.finalize()))
+    Ok(hex(digest.finish().as_ref()))
 }
 
 /// Deletes a file (never a folder); true if it is gone.
@@ -353,6 +361,28 @@ pub mod faults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Projects store each file's hash, made with the `sha2` crate before the switch to `ring`.
+    /// Both must give the same text for the same bytes, or every stored file would look changed.
+    #[test]
+    fn hashes_match_the_standard_and_what_projects_already_store() {
+        use sha2::Digest;
+        let d = tempfile::tempdir().unwrap();
+        let root = paths::norm(d.path());
+        let abc = format!("{root}/abc.txt");
+        fs::write(&abc, b"abc").unwrap();
+        assert_eq!(sha256(&abc).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let empty = format!("{root}/empty.txt");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(sha256(&empty).unwrap(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        // Several read buffers and an odd tail, through both the plain hash and the copy.
+        let bytes: Vec<u8> = (0..(3 * BUFFER + 4_097)).map(|i| (i * 31 % 251) as u8).collect();
+        let big = format!("{root}/big.bin");
+        fs::write(&big, &bytes).unwrap();
+        let old = hex(&sha2::Sha256::digest(&bytes));
+        assert_eq!(sha256(&big).unwrap(), old);
+        assert_eq!(copy_hashing(&big, &format!("{root}/big copy.bin")).unwrap(), old);
+    }
 
     #[test]
     fn rename_never_replaces() {

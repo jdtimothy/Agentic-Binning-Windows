@@ -731,12 +731,31 @@ export async function reportIfUnread(state) {
 // ---------------------------------------------------------------------------------------------
 
 let pullUi = null;
+/** The last line winget printed, shown under the Install button while it runs. */
+let installLine = '';
+export function onInstall(r) {
+  if (r.finished) {
+    installLine = '';
+    toast(r.error ? `${r.what} wasn't installed: ${r.error}` : `${r.what} is installed`);
+    reboot().then(() => { if (pullUi) pullUi(); render(); });
+  } else {
+    installLine = r.line || installLine;
+    if (pullUi) pullUi();
+  }
+}
+
 export function onPull(r) {
   if (r.finished) {
     if (r.error) toast(`The download didn't finish: ${r.error}`);
     else toast('Model downloaded');
     reboot().then(() => { if (pullUi) pullUi(); render(); });
   } else if (pullUi) pullUi(r);
+}
+
+/** " (ARM64)" or " (x64, emulated)" after "FFmpeg", from what the core read in its header. */
+function ffBuild(ff) {
+  if (!ff || !ff.machine || ff.machine === 'other') return '';
+  return ` (${ff.machine === 'arm64' ? 'ARM64' : ff.machine}${ff.emulated ? ', emulated' : ''})`;
 }
 
 export function settings() {
@@ -765,6 +784,18 @@ export function settings() {
         input.addEventListener('change', () => set({ [key]: input.value.trim() }));
         return input;
       };
+      const link = (label, url) => h('button.link', { onclick: () => api.openExternal(url) }, label);
+      // Installing runs `winget install` only when the person presses the button, next to the
+      // terms they accept by pressing it.
+      const installRow = (what, name, terms) => {
+        const busy = b.installing === name;
+        if (!b.canInstall) return h('p.hint', 'Windows Package Manager (winget) isn\'t on this computer, so install it by hand, then press Check again.');
+        return h('div', { style: 'display:flex;flex-direction:column;gap:8px' },
+          h('div', { style: 'display:flex;gap:8px;align-items:center' },
+            h('button.mini', { disabled: !!b.installing, onclick: async () => { try { installLine = ''; await reboot(await api.call('install', { what })); draw(); } catch (e) { fail(e); } } }, icon('download', 16), busy ? `Installing ${name}…` : `Install ${name}`),
+            busy && installLine ? h('span.hint.grow.selectable', installLine) : null),
+          h('p.hint', terms));
+      };
       const keyInput = h('input.input', { type: 'password', placeholder: 'sk-ant-…', autocomplete: 'off', spellcheck: false });
       const log = h('pre.logbox', 'Loading…');
       api.call('log').then((r) => { log.textContent = r.lines.length ? r.lines.join('\n') : 'Nothing yet.'; log.scrollTop = log.scrollHeight; }).catch(() => {});
@@ -775,19 +806,30 @@ export function settings() {
           h('div.statusline', h(`i.dot${g.path ? '.ok' : '.warn'}`), h('span.grow.selectable', g.path ? `${g.version || 'GenieX'} · ${g.path}` : 'GenieX was not found on this computer'),
             h('button.mini', { onclick: async () => { try { await reboot(await api.call('genie.status')); draw(); render(); toast(S.boot.genie.path ? 'GenieX found' : 'GenieX not found'); } catch (e) { fail(e); } } }, icon('refresh', 16), 'Check again')),
           g.error ? h('div.note', icon('warn', 18), h('span.grow', `GenieX answered with an error: ${g.error}`)) : null,
-          g.path ? null : h('div.note.info', icon('info', 18), h('span.grow', 'Install the GenieX CLI for Windows on Snapdragon, then press Check again. Until then the app runs with a simulated model so you can try everything else. ',
-            h('button.link', { onclick: () => api.openExternal('https://github.com/qualcomm/GenieX') }, 'GenieX on GitHub'))),
+          g.path ? null : h('div.note.info', icon('info', 18), h('span.grow', 'GenieX runs the models that analyze and sort your photos and videos, on this computer. Photos and videos can\'t be analyzed until it is installed. ',
+            link('GenieX on GitHub', 'https://github.com/qualcomm/GenieX'))),
+          g.path ? null : installRow('geniex', 'GenieX', h('span', 'Downloads Qualcomm\'s GenieX CLI from its official release with Windows Package Manager (winget), about the same as typing winget install Qualcomm.GenieX.CLI. By pressing Install you accept ',
+            link('GenieX\'s BSD-3-Clause license', 'https://github.com/qualcomm/GenieX/blob/main/LICENSE'), ' and Qualcomm\'s AI Runtime SDK terms for the runtime inside it. The models are downloaded afterwards, from Hugging Face, under ',
+            link('Liquid AI\'s LFM Open License', 'https://huggingface.co/LiquidAI/LFM3-VL-2B'), '.')),
           modelRow(b.models.vision, g.visionReady, 'analyzes photos and videos'),
           modelRow(b.models.text, g.textReady, 'sorts into categories'),
           h('label.field', h('span.label', 'Run on'), seg([['NPU', 'npu'], ['GPU', 'gpu'], ['CPU', 'cpu']], s.compute, (v) => set({ compute: v }))),
-          h('label.field', h('span.label', 'Use'), seg([['GenieX when installed', 'Auto'], ['GenieX always', 'GenieX'], ['Simulated', 'Simulated']], s.backend, (v) => set({ backend: v }))),
           h('label.field', h('span.label', 'Path to geniex.exe (only if it isn\'t found)'), pathField('geniexPath', 'C:\\…\\geniex.exe')),
-          h('p.hint', 'The app runs GenieX as terminal commands: geniex list, geniex pull, and one geniex infer per photo, clip or sorting call. The exact commands are in the activity log below.')),
+          h('p.hint', 'The app runs GenieX as terminal commands: geniex list, geniex pull, and one geniex serve that every photo, clip and sorting call is sent to. The exact commands are in the activity log below.')),
 
         h('div.sect', h('h3', 'Analysis'),
           h('label.field', h('span.label', 'Max frames per clip'), seg(b.frameCaps.map((n) => [String(n), n]), s.maxFramesPerClip, (v) => set({ maxFramesPerClip: v }))),
           h('p.hint', `${b.frameCapHint}. More frames see more of a long clip and take longer.`),
-          h('div.statusline', h(`i.dot${b.ffmpeg.path ? '.ok' : '.warn'}`), h('span.grow.selectable', b.ffmpeg.path ? `FFmpeg · ${b.ffmpeg.path}` : 'FFmpeg not found: the app\'s own window reads video frames instead, for formats Windows can play')),
+          h('div.statusline', h(`i.dot${!b.ffmpeg.path || b.ffmpeg.emulated ? '.warn' : '.ok'}`), h('span.grow.selectable', b.ffmpeg.path ? `FFmpeg${ffBuild(b.ffmpeg)} · ${b.ffmpeg.path}` : 'FFmpeg was not found on this computer'),
+            h('button.mini', { onclick: async () => { try { await reboot(await api.call('genie.status')); draw(); toast(S.boot.ffmpeg.path ? `FFmpeg found${ffBuild(S.boot.ffmpeg)}` : 'FFmpeg not found'); } catch (e) { fail(e); } } }, icon('refresh', 16), 'Check again')),
+          b.ffmpeg.path ? null : h('div.note.info', icon('info', 18), h('span.grow', 'Without FFmpeg the app\'s own window reads video frames, only for formats Windows can play; HEIC and DNG photos can\'t be read; and clips waiting in line show no thumbnail until they are analyzed.')),
+          // An x64 FFmpeg works on an ARM PC through emulation, slower: on the owner's 14 clips
+          // the app's FFmpeg work took 106 s with it and 65 to 71 s with an ARM64 build.
+          b.ffmpeg.path && b.ffmpeg.emulated ? h('div.note', icon('warn', 18), h('span.grow', b.ffmpeg.fromSetting
+            ? 'The ffmpeg.exe set below is an x64 build, which Windows runs through emulation on this ARM PC, so reading video takes about half as long again. Clear the path to let the app find an ARM64 build, or point it at one.'
+            : 'This FFmpeg is an x64 build, which Windows runs through emulation on this ARM PC, so reading video takes about half as long again. No ARM64 build was found. Once one is installed, the app uses it instead.')) : null,
+          !b.ffmpeg.path || (b.ffmpeg.emulated && !b.ffmpeg.fromSetting) ? installRow('ffmpeg', 'FFmpeg', h('span', 'Downloads an LGPL build of FFmpeg for Windows on Arm (BtbN.FFmpeg.LGPL) with Windows Package Manager (winget). FFmpeg is under the ',
+            link('LGPL 2.1 or later', 'https://ffmpeg.org/legal.html'), '; the app only runs it.')) : null,
           h('label.field', h('span.label', 'Path to ffmpeg.exe (only if it isn\'t found)'), pathField('ffmpegPath', 'C:\\…\\ffmpeg.exe')),
           h('label.check', h('input', { type: 'checkbox', checked: s.keepAwake, onchange: (e) => set({ keepAwake: e.target.checked }) }), h('span', 'Keep the computer awake while a run is in progress'))),
 

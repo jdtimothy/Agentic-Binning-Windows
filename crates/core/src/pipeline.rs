@@ -36,6 +36,8 @@ pub mod failure {
     pub const MODEL_FAILED: &str = "The vision model failed";
     pub const MODEL_NOT_STARTED: &str = "The vision model couldn't start";
     pub const MODEL_NOT_DOWNLOADED: &str = "The vision model couldn't be downloaded";
+    /// `ensure_vision` answers this when there is no GenieX to run; the run ends with it as is.
+    pub const GENIEX_MISSING: &str = "GenieX isn't installed. Install it in Settings, then press Resume";
 
     /// A short sentence for `code`; unknown or missing codes get a generic one.
     pub fn describe(code: Option<&str>) -> &'static str {
@@ -538,6 +540,10 @@ fn run_batch(inner: &Inner, env: &RunEnv, current: &mut Option<i64>) -> Result<(
     inner.update(|s| s.phase = Phase::LoadingModel);
     *inner.vision.lock() = Some(env.vision.clone());
     (env.ensure_vision)(&|fraction| inner.update(|s| s.download_fraction = Some(fraction))).map_err(|e| {
+        if e == failure::GENIEX_MISSING {
+            (env.log)(&format!("Analysis can't start: {e}"));
+            return Err(e);
+        }
         (env.log)(&format!("Could not fetch the vision model: {e}"));
         Err(failure::MODEL_NOT_DOWNLOADED.to_string())
     })?;

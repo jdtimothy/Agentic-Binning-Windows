@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::paths;
 use image::{imageops::FilterType, DynamicImage, ImageDecoder, ImageReader, RgbImage};
 use serde::Serialize;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -22,6 +23,8 @@ const IMAGE_QUALITY: u8 = 90;
 const THUMB_QUALITY: u8 = 85;
 /// Frames one FFmpeg run cuts from a clip.
 const FRAMES_PER_RUN: usize = 16;
+/// Threads each decoder gets in a run that opens the clip once per frame.
+const DECODER_THREADS: &str = "2";
 
 /// The media kind of a file judged by its extension, or None if it is not a supported type.
 pub fn kind_of(path: &str) -> Option<ItemKind> {
@@ -83,14 +86,19 @@ pub fn quiet_command(program: &str) -> Command {
     cmd
 }
 
-/// Looks for a program: the configured path first, then beside the app, then the PATH.
+/// Looks for a program: the configured path first, then beside the app, then the PATH, then the
+/// PATH as the registry holds it now (a program installed after the app started).
 pub fn find_program(name: &str, configured: Option<&str>, extra_dirs: &[PathBuf]) -> Option<String> {
     if let Some(c) = configured.map(str::trim).filter(|c| !c.is_empty()) {
         if Path::new(c).is_file() {
             return Some(c.to_string());
         }
     }
-    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat", ""] } else { &[""] };
+    programs_in(name, &search_dirs(extra_dirs)).into_iter().next().or_else(|| programs_in(name, &crate::install::registry_path_dirs()).into_iter().next())
+}
+
+/// `extra_dirs`, then the app's own folder, then the PATH, in that order.
+fn search_dirs(extra_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = extra_dirs.to_vec();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
@@ -100,29 +108,117 @@ pub fn find_program(name: &str, configured: Option<&str>, extra_dirs: &[PathBuf]
     if let Some(path) = std::env::var_os("PATH") {
         dirs.extend(std::env::split_paths(&path));
     }
+    dirs
+}
+
+/// Every copy of `name` in `dirs`, in their order, each path once (compared ignoring case).
+fn programs_in(name: &str, dirs: &[PathBuf]) -> Vec<String> {
+    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat", ""] } else { &[""] };
+    let mut found: Vec<String> = Vec::new();
     for d in dirs {
         for ext in exts {
             let candidate = d.join(format!("{name}{ext}"));
             if candidate.is_file() {
-                return Some(candidate.to_string_lossy().to_string());
+                let path = candidate.to_string_lossy().to_string();
+                if !found.iter().any(|f| paths::same_path(&paths::norm(f), &paths::norm(&path))) {
+                    found.push(path);
+                }
+                break;
             }
         }
     }
-    None
+    found
+}
+
+/// The processor a Windows program is built for, read from its PE header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Machine {
+    Arm64,
+    X64,
+    X86,
+    Other,
+}
+
+impl Machine {
+    /// The machine field of a PE file's header, from the file's first bytes.
+    pub fn from_header(bytes: &[u8]) -> Option<Machine> {
+        if bytes.get(..2)? != b"MZ" {
+            return None;
+        }
+        let at = u32::from_le_bytes(bytes.get(0x3c..0x40)?.try_into().ok()?) as usize;
+        if bytes.get(at..at + 4)? != b"PE\0\0" {
+            return None;
+        }
+        let machine = u16::from_le_bytes(bytes.get(at + 4..at + 6)?.try_into().ok()?);
+        Some(match machine {
+            0xAA64 => Machine::Arm64,
+            0x8664 => Machine::X64,
+            0x014c => Machine::X86,
+            _ => Machine::Other,
+        })
+    }
+
+    pub fn of_file(path: &str) -> Option<Machine> {
+        let mut head = vec![0u8; 4096];
+        let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)).ok()?;
+        Machine::from_header(&head[..n])
+    }
+}
+
+/// Whether this app runs on an ARM64 processor, where an x64 program is emulated.
+const HOST_IS_ARM64: bool = cfg!(target_arch = "aarch64");
+
+/// The copy to use: on an ARM64 PC the first native ARM64 build, as an x64 one runs under
+/// emulation (a third slower on the owner's clips, Nov 2026); otherwise the first one.
+fn prefer_native(candidates: &[String], host_is_arm64: bool, machine: &dyn Fn(&str) -> Option<Machine>) -> Option<String> {
+    let native = || candidates.iter().find(|c| machine(c) == Some(Machine::Arm64));
+    host_is_arm64.then(native).flatten().or(candidates.first()).cloned()
 }
 
 /// Where FFmpeg and FFprobe are, when installed.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Ffmpeg {
     pub ffmpeg: Option<String>,
     pub ffprobe: Option<String>,
+    /// What the chosen `ffmpeg` is built for.
+    pub machine: Option<Machine>,
+    /// It is an x64 or x86 build running under emulation on this ARM64 PC.
+    pub emulated: bool,
+    /// It is the path set in Settings, not one the app found.
+    pub from_setting: bool,
 }
 
 impl Ffmpeg {
+    /// The path set in Settings when there is one; otherwise, on an ARM64 PC, the first ARM64
+    /// build on the PATH (as it is now, or in the registry if the PATH has none), else the first.
     pub fn locate(configured: Option<&str>) -> Self {
-        let ffmpeg = find_program("ffmpeg", configured, &[]);
+        let set = configured.map(str::trim).filter(|c| !c.is_empty() && Path::new(c).is_file()).map(str::to_string);
+        let ffmpeg = set.clone().or_else(|| {
+            let mut found = programs_in("ffmpeg", &search_dirs(&[]));
+            let machine = |p: &str| Machine::of_file(p);
+            if !HOST_IS_ARM64 && !found.is_empty() {
+                return found.into_iter().next();
+            }
+            if !found.iter().any(|f| machine(f) == Some(Machine::Arm64)) {
+                for more in programs_in("ffmpeg", &crate::install::registry_path_dirs()) {
+                    if !found.iter().any(|f| paths::same_path(&paths::norm(f), &paths::norm(&more))) {
+                        found.push(more);
+                    }
+                }
+            }
+            prefer_native(&found, HOST_IS_ARM64, &machine)
+        });
         let beside: Vec<PathBuf> = ffmpeg.as_deref().and_then(|f| Path::new(f).parent().map(Path::to_path_buf)).into_iter().collect();
-        Ffmpeg { ffprobe: find_program("ffprobe", None, &beside), ffmpeg }
+        let machine = ffmpeg.as_deref().and_then(Machine::of_file);
+        Ffmpeg {
+            ffprobe: find_program("ffprobe", None, &beside),
+            emulated: HOST_IS_ARM64 && matches!(machine, Some(Machine::X64 | Machine::X86)),
+            from_setting: set.is_some(),
+            machine,
+            ffmpeg,
+        }
     }
 }
 
@@ -518,8 +614,12 @@ impl MediaPreparer {
         for (batch, chunk) in times.chunks(FRAMES_PER_RUN).enumerate() {
             let mut cmd = quiet_command(ffmpeg);
             cmd.args(["-v", "error", "-y"]);
+            // Two threads for each clip's decoder. Left to itself FFmpeg gives every one of the 16 a
+            // thread per core, each holding frames: 23 GB for a 4K HEVC clip on an 18-core PC, 4 to
+            // 13 GB for the owner's other 13 clips. With two it is 1 to 4 GB, the frames are the
+            // same bytes, and no clip took longer (most were quicker).
             for t in chunk {
-                cmd.args(["-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"]).arg(path);
+                cmd.args(["-threads", DECODER_THREADS, "-ss", &format!("{:.3}", *t as f64 / 1000.0), "-i"]).arg(path);
             }
             for (i, t) in chunk.iter().enumerate() {
                 cmd.args(["-map", &format!("{i}:v:0"), "-frames:v", "1", "-q:v", "3", "-vf", &pad]).arg(file_for(*t));
@@ -581,6 +681,67 @@ pub fn save_grabbed_frame(out_dir: &str, time_ms: i64, jpeg: &[u8]) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first bytes of a PE program built for `machine`.
+    fn pe(machine: u16) -> Vec<u8> {
+        let mut b = vec![0u8; 0x100];
+        b[..2].copy_from_slice(b"MZ");
+        b[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        b[0x80..0x84].copy_from_slice(b"PE\0\0");
+        b[0x84..0x86].copy_from_slice(&machine.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn the_processor_a_program_is_built_for_is_read_from_its_header() {
+        assert_eq!(Machine::from_header(&pe(0xAA64)), Some(Machine::Arm64));
+        assert_eq!(Machine::from_header(&pe(0x8664)), Some(Machine::X64));
+        assert_eq!(Machine::from_header(&pe(0x014c)), Some(Machine::X86));
+        assert_eq!(Machine::from_header(&pe(0x01c4)), Some(Machine::Other));
+        assert_eq!(Machine::from_header(b"#!/bin/sh\n"), None);
+        assert_eq!(Machine::from_header(&pe(0xAA64)[..0x40]), None, "cut short before the PE header");
+        let mut not_pe = pe(0xAA64);
+        not_pe[0x80] = b'X';
+        assert_eq!(Machine::from_header(&not_pe), None);
+    }
+
+    #[test]
+    fn a_file_on_disk_is_read_the_same_way() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths::norm(d.path().join("ffmpeg.exe"));
+        std::fs::write(&p, pe(0x8664)).unwrap();
+        assert_eq!(Machine::of_file(&p), Some(Machine::X64));
+        assert_eq!(Machine::of_file(&format!("{p}.missing")), None);
+    }
+
+    /// Seen on the owner's PC: an x64 FFmpeg came first on the PATH, before an ARM64 one.
+    #[test]
+    fn on_an_arm64_pc_a_native_build_wins_over_an_earlier_x64_one() {
+        let c: Vec<String> = ["C:/Gyan/ffmpeg.exe", "C:/BtbN/ffmpeg.exe", "C:/Other/ffmpeg.exe"].map(String::from).to_vec();
+        let machine = |p: &str| Some(if p.contains("BtbN") || p.contains("Other") { Machine::Arm64 } else { Machine::X64 });
+        assert_eq!(prefer_native(&c, true, &machine).as_deref(), Some("C:/BtbN/ffmpeg.exe"));
+        // Elsewhere the PATH order stands.
+        assert_eq!(prefer_native(&c, false, &machine).as_deref(), Some("C:/Gyan/ffmpeg.exe"));
+        // With no ARM64 build, the first one, emulated, is better than none.
+        let all_x64 = |_: &str| Some(Machine::X64);
+        assert_eq!(prefer_native(&c, true, &all_x64).as_deref(), Some("C:/Gyan/ffmpeg.exe"));
+        // A file whose header can't be read is still a candidate.
+        assert_eq!(prefer_native(&c[..1], true, &|_| None).as_deref(), Some("C:/Gyan/ffmpeg.exe"));
+        assert_eq!(prefer_native(&[], true, &machine), None);
+    }
+
+    #[test]
+    fn each_copy_is_listed_once_in_folder_order() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        for dir in [&a, &b] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }), b"x").unwrap();
+        }
+        let found = programs_in("ffmpeg", &[b.clone(), a.clone(), b.clone()]);
+        assert_eq!(found.len(), 2);
+        assert!(found[0].starts_with(&*b.to_string_lossy()), "b is searched first: {found:?}");
+    }
 
     #[test]
     fn kinds_and_scan() {

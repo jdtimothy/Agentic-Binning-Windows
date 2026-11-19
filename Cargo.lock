@@ -276,6 +276,7 @@ dependencies = [
  "keyring",
  "parking_lot",
  "regex",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

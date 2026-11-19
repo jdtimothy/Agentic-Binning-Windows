@@ -2,7 +2,7 @@
 //! It exists so the interface can be developed and tested on a computer without Windows or a
 //! Snapdragon NPU. It listens on 127.0.0.1 only and has no access control: don't expose it.
 //!
-//! `cargo run -p binning-devserver -- [--port 4173] [--ui ui] [--data DIR] [--projects DIR]`
+//! `cargo run -p binning-devserver -- [--port 4173] [--ui ui] [--data DIR] [--projects DIR] [--simulated]`
 
 use binning_core::app::App;
 use parking_lot::{Condvar, Mutex};
@@ -188,6 +188,8 @@ fn main() {
     let events = Arc::new(Events::default());
     let sink = events.clone();
     let app = App::new(data_dir, binning_core::paths::norm(projects_root), Arc::new(move |name, payload| sink.push(name, payload)));
+    // Off Windows there is no GenieX: `--simulated` stands the simulated models in for it.
+    app.use_simulated_models(args.iter().any(|a| a == "--simulated"));
     app.restore_current();
     let server = tiny_http::Server::http(format!("127.0.0.1:{port}")).expect("could not listen");
     println!("Agentic Binning (browser mode) on http://127.0.0.1:{port}");
