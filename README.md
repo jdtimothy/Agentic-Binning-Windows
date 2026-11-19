@@ -4,16 +4,10 @@
 
 This is the Windows version of [Agentic Binning for Android](https://github.com/jdtimothy/Agentic-Binning-Android). You point it at a folder of photos and videos. A vision model running on the computer's NPU through Qualcomm's GenieX looks at every file, gives it a friendly name, a short description, tags, a category and a shot type. **Bin Files** then moves everything into category folders. You can search the project by keyword at any time. Your media never leaves the computer.
 
-It has the same glass look, the same two screens (Analyze and Project Media), the same sheets and the same rules as the Android app, laid out for a wide window, a mouse and a keyboard.
-
 <p>
-  <img src="docs/images/analyze.png" width="49%" alt="The Analyze screen: a carousel of media cards beside the description the model is writing">
-  <img src="docs/images/project-media.png" width="49%" alt="Project Media: search, category chips and a grid of named thumbnails">
+  <img src="docs/images/analyze.gif" width="49%" alt="The Analyze screen: clips slide through the carousel while the model describes each one">
+  <img src="docs/images/project-media.gif" width="49%" alt="Project Media: search, category chips and a grid of named thumbnails">
 </p>
-
-*These screenshots were taken with the built-in simulated model on generated test pictures, not with GenieX.*
-
-> **Status: the core works on a Snapdragon X2 PC with real GenieX; the window is not fully checked.** The core logic has about 440 automated tests, most of them the Android app's own test cases run against this code. On 11 November 2026 they and the on-device tests `g01` to `g10` passed on a Snapdragon X2 Elite Extreme with GenieX CLI v0.10.0: real photos and clips analyzed on the NPU, sorted, and binned with every file's hash unchanged. Moves to and from an exFAT drive passed too. Not yet checked: the window's pickers, drag and drop and its own video frame reader. One 12-megapixel photo takes about 2 seconds and a clip about 30, with the model kept loaded by `geniex serve`. Details are in [docs/notes/windows-first-run.md](docs/notes/windows-first-run.md). Start with [docs/testing-on-windows.md](docs/testing-on-windows.md), or give an agent [docs/windows-agent-brief.md](docs/windows-agent-brief.md).
 
 ## What you need
 
@@ -24,7 +18,7 @@ It has the same glass look, the same two screens (Analyze and Project Media), th
   geniex pull LiquidAI/LFM3-VL-2B-GGUF:Q4_0 --model-type vlm
   geniex pull LiquidAI/LFM3-1.7B-GGUF:Q4_0 --model-type llm
   ```
-- Recommended: **FFmpeg**. Settings offers to install it with `winget install BtbN.FFmpeg.LGPL` (an ARM64 build). With it, video frames are read exactly as on Android, HEIC and DNG stills work, and clips waiting in line get thumbnails. Without it, the app's own window reads frames from video formats Windows can play.
+- Recommended: **FFmpeg**. Settings offers to install it with `winget install BtbN.FFmpeg.LGPL` (an ARM64 build). With it, video frames are read precisely, HEIC and DNG stills work, and clips waiting in line get thumbnails. Without it, the app's own window reads frames from video formats Windows can play.
 
 Without GenieX the app still starts and lists what you add, but analysis waits: the top-left chip reads **GenieX not installed** and a run stops with a message pointing to Settings. Nothing is installed until you press Install there, next to the license of what it installs. winget downloads each program from its publisher's own release; nothing is bundled with the app.
 
@@ -40,10 +34,6 @@ The app runs GenieX as terminal commands, as child processes, and reads what the
 | `geniex infer <model>:Q4_0 --compute npu --nctx … --max-tokens … -s <system prompt> --grammar-path <file> -i <prompt file>` | Once per photo, clip and sorting call instead, only when `geniex serve` cannot start |
 
 The command behind the last call is written to the activity log in Settings, so you can paste it into a terminal. The details, and what was observed of GenieX to get them right, are at the top of [`crates/core/src/geniex.rs`](crates/core/src/geniex.rs) and [`crates/core/src/geniex_serve.rs`](crates/core/src/geniex_serve.rs).
-
-As on Android, the vision model is loaded once for a run and the sorting model once for a sort, and only one of them is loaded at a time: the server swaps them by itself. One thing differs:
-
-- **A video's actions are timed by the app, not by the model.** Every frame is attached ahead of the text, so a frame's time cannot sit next to it, and the model then labelled its moments with the first few times of the clip. So the main call writes the description, tags and name only. The app compares neighbouring frames, picks the opening and up to four moments where the picture changes most (one from each quarter of the clip), and asks the model in one short call each what happens there. The time is the frame's own. A clip in which nothing changes gets no actions. The prompt version is recorded as `analysis-v3-cli`.
 
 ## How it works
 
@@ -90,32 +80,6 @@ tauri build                         # the installer lands in target\release\bund
 ```
 
 `tauri dev` runs the app without packaging it. Every push also builds the installer on GitHub's Windows ARM64 runner; it is attached to the workflow run as an artifact.
-
-### Releasing a version
-
-1. On a branch, set the version in `Cargo.toml` and `src-tauri/tauri.conf.json` (numbers follow the Android app's where the features match), and give the changelog's `[Unreleased]` entries their version and date. Merge it by pull request.
-2. Tag that commit on `main` and push the tag: `git tag v1.0.1` then `git push origin v1.0.1`.
-3. The Build workflow builds the installer from the tag and attaches it to a GitHub release of the same name.
-
-### Working on the interface without Windows
-
-```bash
-cargo run -p binning-devserver -- --data /tmp/ab-data --projects /tmp/ab-projects
-# then open http://127.0.0.1:4173
-```
-
-This serves the same interface to a web browser with the real core behind it, using GenieX when it is installed. Add `--simulated` to use the simulated model instead (off Windows there is no GenieX). Pickers become a prompt for a path. It listens on this computer only.
-
-## How the code is laid out
-
-| Path | What |
-| --- | --- |
-| `crates/core` | Everything that is not a window: the project database, analysis and sorting prompts and parsers, the pipeline, the file-move engine, the GenieX command runner, the Claude client, and the command interface the window calls |
-| `src-tauri` | The Windows app: a Tauri window, native pickers, drag and drop, Show in Explorer |
-| `ui` | The interface: plain HTML, CSS and JavaScript modules, no build step |
-| `crates/devserver` | The browser mode above |
-
-The project database uses the Android app's schema (version 5) and table names, so the two apps describe a project the same way. Paths inside a database are absolute, so a project made on a phone does not open usefully on a PC or the other way round.
 
 ## Privacy
 
