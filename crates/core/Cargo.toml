@@ -9,7 +9,8 @@ license.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+# SHA-256 with the processor's hashing instructions (see files::hasher); already in the app via rustls.
+ring = "0.17"
 image = { version = "0.25.5", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "tiff"] }
 kamadak-exif = "0.6"
 ureq = { version = "2", features = ["json"] }
@@ -21,6 +22,8 @@ parking_lot = "0.12"
 fs4 = { version = "0.13", features = ["sync"] }
 
 [dev-dependencies]
+# Only to check that ring gives the same hashes the projects already store.
+sha2 = "0.10"
 parking_lot = "0.12"
 image = { version = "0.25.5", default-features = false, features = ["png"] }
 tempfile = "3"

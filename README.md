@@ -73,7 +73,12 @@ Sorting can use Claude instead of the local model. It works only from the text t
 
 ## Building
 
-You need Rust (stable) and, on Windows, the Visual Studio C++ build tools with the ARM64 components.
+You need Rust (stable) and, on Windows:
+
+- the Visual Studio C++ build tools with the ARM64 components;
+- clang, which `ring` (the app's SHA-256 and TLS) needs for its C and assembly parts on ARM64: the Visual Studio Installer's "C++ Clang tools for Windows" component, or `winget install LLVM.LLVM`.
+
+Run cargo with the ARM64 build environment loaded: from "Developer PowerShell for VS" set to ARM64, or after running `vcvarsall.bat arm64` from the build tools' `VC\Auxiliary\Build` folder in the same command prompt. Without it the build stops at `ring` with `'assert.h' file not found`.
 
 ```powershell
 git clone https://github.com/jdtimothy/Agentic-Binning-Windows.git
