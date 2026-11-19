@@ -997,7 +997,7 @@ impl App {
             "pipeline": self.pipeline.state(),
             "genie": genie,
             "simulated": self.simulated(),
-            "ffmpeg": {"path": ff.ffmpeg, "ffprobe": ff.ffprobe},
+            "ffmpeg": {"path": ff.ffmpeg, "ffprobe": ff.ffprobe, "machine": ff.machine, "emulated": ff.emulated, "fromSetting": ff.from_setting},
             "apiKey": self.keys.masked(),
             "projectsRoot": paths::display(&self.registry.projects_root),
             "models": {"vision": LFM3_VL_2B, "text": LFM3_1_7B},

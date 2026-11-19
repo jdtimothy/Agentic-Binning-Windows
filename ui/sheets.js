@@ -752,6 +752,12 @@ export function onPull(r) {
   } else if (pullUi) pullUi(r);
 }
 
+/** " (ARM64)" or " (x64, emulated)" after "FFmpeg", from what the core read in its header. */
+function ffBuild(ff) {
+  if (!ff || !ff.machine || ff.machine === 'other') return '';
+  return ` (${ff.machine === 'arm64' ? 'ARM64' : ff.machine}${ff.emulated ? ', emulated' : ''})`;
+}
+
 export function settings() {
   openSheet((close, entry) => {
     const body = h('div.sbody');
@@ -814,11 +820,16 @@ export function settings() {
         h('div.sect', h('h3', 'Analysis'),
           h('label.field', h('span.label', 'Max frames per clip'), seg(b.frameCaps.map((n) => [String(n), n]), s.maxFramesPerClip, (v) => set({ maxFramesPerClip: v }))),
           h('p.hint', `${b.frameCapHint}. More frames see more of a long clip and take longer.`),
-          h('div.statusline', h(`i.dot${b.ffmpeg.path ? '.ok' : '.warn'}`), h('span.grow.selectable', b.ffmpeg.path ? `FFmpeg · ${b.ffmpeg.path}` : 'FFmpeg was not found on this computer'),
-            h('button.mini', { onclick: async () => { try { await reboot(await api.call('genie.status')); draw(); toast(S.boot.ffmpeg.path ? 'FFmpeg found' : 'FFmpeg not found'); } catch (e) { fail(e); } } }, icon('refresh', 16), 'Check again')),
+          h('div.statusline', h(`i.dot${!b.ffmpeg.path || b.ffmpeg.emulated ? '.warn' : '.ok'}`), h('span.grow.selectable', b.ffmpeg.path ? `FFmpeg${ffBuild(b.ffmpeg)} · ${b.ffmpeg.path}` : 'FFmpeg was not found on this computer'),
+            h('button.mini', { onclick: async () => { try { await reboot(await api.call('genie.status')); draw(); toast(S.boot.ffmpeg.path ? `FFmpeg found${ffBuild(S.boot.ffmpeg)}` : 'FFmpeg not found'); } catch (e) { fail(e); } } }, icon('refresh', 16), 'Check again')),
           b.ffmpeg.path ? null : h('div.note.info', icon('info', 18), h('span.grow', 'Without FFmpeg the app\'s own window reads video frames, only for formats Windows can play; HEIC and DNG photos can\'t be read; and clips waiting in line show no thumbnail until they are analyzed.')),
-          b.ffmpeg.path ? null : installRow('ffmpeg', 'FFmpeg', h('span', 'Downloads an LGPL build of FFmpeg for Windows on Arm (BtbN.FFmpeg.LGPL) with Windows Package Manager (winget). FFmpeg is under the ',
-            link('LGPL 2.1 or later', 'https://ffmpeg.org/legal.html'), '; the app only runs it.')),
+          // An x64 FFmpeg works on an ARM PC through emulation, slower: on the owner's 14 clips
+          // the app's FFmpeg work took 106 s with it and 65 to 71 s with an ARM64 build.
+          b.ffmpeg.path && b.ffmpeg.emulated ? h('div.note', icon('warn', 18), h('span.grow', b.ffmpeg.fromSetting
+            ? 'The ffmpeg.exe set below is an x64 build, which Windows runs through emulation on this ARM PC, so reading video takes about half as long again. Clear the path to let the app find an ARM64 build, or point it at one.'
+            : 'This FFmpeg is an x64 build, which Windows runs through emulation on this ARM PC, so reading video takes about half as long again. No ARM64 build was found. Once one is installed, the app uses it instead.')) : null,
+          !b.ffmpeg.path || (b.ffmpeg.emulated && !b.ffmpeg.fromSetting) ? installRow('ffmpeg', 'FFmpeg', h('span', 'Downloads an LGPL build of FFmpeg for Windows on Arm (BtbN.FFmpeg.LGPL) with Windows Package Manager (winget). FFmpeg is under the ',
+            link('LGPL 2.1 or later', 'https://ffmpeg.org/legal.html'), '; the app only runs it.')) : null,
           h('label.field', h('span.label', 'Path to ffmpeg.exe (only if it isn\'t found)'), pathField('ffmpegPath', 'C:\\…\\ffmpeg.exe')),
           h('label.check', h('input', { type: 'checkbox', checked: s.keepAwake, onchange: (e) => set({ keepAwake: e.target.checked }) }), h('span', 'Keep the computer awake while a run is in progress'))),
 

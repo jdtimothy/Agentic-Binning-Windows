@@ -27,6 +27,9 @@ and frame reader are not yet checked there.
   browser devserver (`--simulated`). When GenieX or FFmpeg is missing, Settings
   says so and offers to install it with winget, only when you press Install.
 - Thumbnails for clips copied in from another project while they wait.
+- On an ARM64 PC the app picks an ARM64 FFmpeg over an x64 one found first,
+  and Settings warns when only an x64 build is installed (about a third
+  slower). File hashing uses the processor's SHA-256 instructions.
 - A new app icon.
 - About 430 automated tests, most of them the Android app's own cases, plus
   tests for real GenieX and a second drive that are run by hand.
